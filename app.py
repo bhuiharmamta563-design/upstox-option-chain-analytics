@@ -1,64 +1,70 @@
 import streamlit as st
 import pandas as pd
-import upstox_client
+import requests
 import os
 from dotenv import load_dotenv
 
-# Page Configuration
 st.set_page_config(page_title="Vajra Analytics - Option Chain", layout="wide")
 st.title("📊 Live Nifty Option Chain & Volume Analytics")
 
-# Environment variables load karein (.env file ya Streamlit secrets se)
+# Secrets ya .env se token lena
 load_dotenv()
-ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+try:
+    ACCESS_TOKEN = st.secrets["UPSTOX_ACCESS_TOKEN"]
+except:
+    ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
 if not ACCESS_TOKEN:
-    st.error("⚠️ Access Token nahi mila! Kripya .env file ya Streamlit secrets check karein.")
+    st.error("⚠️ Access Token nahi mila! Kripya Streamlit Secrets ya .env file check karein.")
     st.stop()
 
-# Upstox API Setup
-configuration = upstox_client.Configuration()
-configuration.access_token = ACCESS_TOKEN
-api_instance = upstox_client.OptionsApi(upstox_client.ApiClient(configuration))
-
-# Sidebar Controls
-st.sidebar.header("Settings")
 expiry_date = st.sidebar.text_input("Expiry Date (YYYY-MM-DD)", "2026-11-12")
 
 @st.cache_data(ttl=5)
 def fetch_option_chain(expiry):
+    url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX%7CNifty%2050&expiry_date={expiry}"
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {ACCESS_TOKEN}'
+    }
     try:
-        response = api_instance.get_option_chain("NSE_INDEX|Nifty 50", expiry)
-        chain_data = []
+        response = requests.get(url, headers=headers)
+        data = response.json()
         
-        for item in response.data:
-            strike = item.strike_price
-            c_oi = item.call_options.market_data.oi if item.call_options else 0
-            p_oi = item.put_options.market_data.oi if item.put_options else 0
-            c_vol = item.call_options.market_data.volume if item.call_options else 0
-            p_vol = item.put_options.market_data.volume if item.put_options else 0
-            c_ltp = item.call_options.market_data.ltp if item.call_options else 0
-            p_ltp = item.put_options.market_data.ltp if item.put_options else 0
+        if data.get('status') == 'success':
+            chain_data = []
+            for item in data.get('data', []):
+                strike = item.get('strike_price')
+                call_opt = item.get('call_options', {})
+                put_opt = item.get('put_options', {})
+                
+                c_oi = call_opt.get('market_data', {}).get('oi', 0)
+                p_oi = put_opt.get('market_data', {}).get('oi', 0)
+                c_vol = call_opt.get('market_data', {}).get('volume', 0)
+                p_vol = put_opt.get('market_data', {}).get('volume', 0)
+                c_ltp = call_opt.get('market_data', {}).get('ltp', 0)
+                p_ltp = put_opt.get('market_data', {}).get('ltp', 0)
 
-            chain_data.append({
-                "Call Vol": c_vol,
-                "Call OI": c_oi,
-                "Call LTP": c_ltp,
-                "Strike": strike,
-                "Put LTP": p_ltp,
-                "Put OI": p_oi,
-                "Put Vol": p_vol
-            })
-        return pd.DataFrame(chain_data)
+                chain_data.append({
+                    "Call Vol": c_vol,
+                    "Call OI": c_oi,
+                    "Call LTP": c_ltp,
+                    "Strike": strike,
+                    "Put LTP": p_ltp,
+                    "Put OI": p_oi,
+                    "Put Vol": p_vol
+                })
+            return pd.DataFrame(chain_data)
+        else:
+            st.error(f"API Error: {data}")
+            return pd.DataFrame()
     except Exception as e:
-        st.error(f"Data fetch karne mein error: {e}")
+        st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-# Data Fetching
 df = fetch_option_chain(expiry_date)
 
 if not df.empty:
-    # Key Levels Metrics (Highest OI & Volume)
     max_call_oi_row = df.loc[df['Call OI'].idxmax()]
     max_put_oi_row = df.loc[df['Put OI'].idxmax()]
     max_call_vol_row = df.loc[df['Call Vol'].idxmax()]
@@ -72,6 +78,5 @@ if not df.empty:
 
     st.markdown("---")
     st.subheader("📋 Complete Option Chain Matrix")
-    
-    # Styled Table
     st.dataframe(df, use_container_width=True, height=500)
+    
