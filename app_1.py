@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import os
+from datetime import date
 from dotenv import load_dotenv
 
 st.set_page_config(page_title="Vajra Analytics - Option Chain", layout="wide")
@@ -17,16 +18,29 @@ if not ACCESS_TOKEN:
     st.error("⚠️ Access Token nahi mila! Kripya Streamlit Secrets ya .env file check karein.")
     st.stop()
 
-# Expiry Dates Dropdown Selector
-expiry_options = [
-    "2026-11-12",
-    "2026-11-19",
-    "2026-11-26",
-    "2026-12-03",
-    "2026-12-10",
-    "2026-12-17",
-    "2026-12-24"
-]
+# Expiry Dates automatically Upstox se fetch honge
+@st.cache_data(ttl=3600)
+def fetch_expiries():
+    url = "https://api.upstox.com/v2/option/contract?instrument_key=NSE_INDEX%7CNifty%2050"
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {ACCESS_TOKEN}'
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        if data.get('status') == 'success':
+            expiries = sorted({item['expiry'] for item in data.get('data', []) if item.get('expiry')})
+            return [e for e in expiries if e >= str(date.today())]
+    except Exception as e:
+        st.error(f"Expiry fetch error: {e}")
+    return []
+
+expiry_options = fetch_expiries()
+
+if not expiry_options:
+    st.error("⚠️ Expiry dates load nahi hui! Access Token check karein.")
+    st.stop()
 
 st.sidebar.header("Settings")
 expiry_date = st.sidebar.selectbox("Select Expiry Date", expiry_options)
