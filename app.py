@@ -215,6 +215,8 @@ def analyze(df, spot):
 # ---------------- Colourful HTML table ----------------
 def fmt_vol(v):
     v = v or 0
+    if v >= 10000000:
+        return f"{v / 10000000:.2f}Cr"
     if v >= 100000:
         return f"{v / 100000:.1f}L"
     if v >= 1000:
@@ -296,18 +298,20 @@ def build_table_html(df, spot, n, ana=None, show_summary=True):
 
         rows.append(
             f'<tr class="{"atm" if is_atm else ""}">'
-            + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
-            + chg_cell(r["Call OI Chg"], cbg)
-            + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
+            # CALLS: IV | LTP | OI Chg | OI | Volume  (Volume strike ke paas)
             + plain_cell(f'{r["Call IV"]:.1f}', cbg)
             + plain_cell(f'{r["Call LTP"]:.2f}', cbg, True)
+            + chg_cell(r["Call OI Chg"], cbg)
+            + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
+            + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
             + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px">{int(s)}</td>'
             + summary
-            + plain_cell(f'{r["Put LTP"]:.2f}', pbg, True)
-            + plain_cell(f'{r["Put IV"]:.1f}', pbg)
+            # PUTS: Volume | OI | OI Chg | LTP | IV  (Volume strike ke paas)
+            + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
             + bar_cell(f'{r["Put OI"] / 1e5:.1f}', r["Put OI"] / mx["Put OI"] * 100, pbg, "rgba(74,222,128,.6)", "to right", "green")
             + chg_cell(r["Put OI Chg"], pbg)
-            + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
+            + plain_cell(f'{r["Put LTP"]:.2f}', pbg, True)
+            + plain_cell(f'{r["Put IV"]:.1f}', pbg)
             + "</tr>"
         )
     if not spot_done:
@@ -337,10 +341,10 @@ def build_table_html(df, spot, n, ana=None, show_summary=True):
     if show_summary:
         head1 += '<th colspan="5" class="sum">STRIKE SUMMARY (Call + Put)</th>'
     head1 += '<th colspan="5" class="puts">PUTS</th></tr>'
-    head2 = "<tr><th>Volume</th><th>OI Chg (L)</th><th>OI (L)</th><th>IV</th><th>LTP</th><th>Strike</th>"
+    head2 = "<tr><th>IV</th><th>LTP</th><th>OI Chg (L)</th><th>OI (L)</th><th>Volume</th><th>Strike</th>"
     if show_summary:
         head2 += "<th>Total Vol</th><th>Total OI (L)</th><th>Total OI Chg (L)</th><th>PCR</th><th>Zone</th>"
-    head2 += "<th>LTP</th><th>IV</th><th>OI (L)</th><th>OI Chg (L)</th><th>Volume</th></tr>"
+    head2 += "<th>Volume</th><th>OI (L)</th><th>OI Chg (L)</th><th>LTP</th><th>IV</th></tr>"
     minw = 1500 if show_summary else 950
     return f'{css}<div class="wrap"><table style="min-width:{minw}px">{head1}{head2}{"".join(rows)}</table></div>'
 
