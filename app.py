@@ -318,7 +318,7 @@ SCROLL_JS = """
   try { s = JSON.parse(window.name || '{}') || {}; } catch(e) { s = {}; }
   if (box) { box.scrollLeft = s.l || 0; box.scrollTop = s.bt || 0; }
   window.scrollTo(0, s.t || 0);
-  function save(){ try { window.name = JSON.stringify({l: box ? box.scrollLeft : 0, bt: box ? box.scrollTop : 0, t: window.pageYOffset || 0}); } catch(e){} }
+  function save(){ try { var o = {}; try { o = JSON.parse(window.name || '{}') || {}; } catch(e) { o = {}; } o.l = box ? box.scrollLeft : 0; o.bt = box ? box.scrollTop : 0; o.t = window.pageYOffset || 0; window.name = JSON.stringify(o); } catch(e){} }
   if (box) box.addEventListener('scroll', save);
   window.addEventListener('scroll', save);
 })();
@@ -428,7 +428,7 @@ def build_table_html(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
         rows.append(spot_row)
 
     css = """
-    <style>
+    <meta charset="utf-8"><style>
       body{margin:0;font-family:Arial,Helvetica,sans-serif;}
       .wrap{overflow-x:auto;}
       .bar{display:flex;justify-content:flex-end;padding:4px 2px 6px 2px;}
@@ -589,170 +589,350 @@ FS_JS = """
 </script>"""
 
 
-def _wrap_svg(svg, w=360):
+ZOOM_JS = r"""
+<script>
+(function(){
+var D = __DATA__;
+var svg = document.getElementById('svg'), stage = document.getElementById('stage'), info = document.getElementById('info');
+var n = D.n, L = D.L, T = D.T, W = D.W, H = D.H, pw = D.pw, ph = D.ph;
+var DEF = {a: D.defA, b: D.defB, lo: D.lo, hi: D.hi};
+var view = {a: DEF.a, b: DEF.b, lo: DEF.lo, hi: DEF.hi}, sel = -1, HINT = info.textContent;
+try {
+  var o0 = JSON.parse(window.name || '{}') || {}, z0 = o0.z;
+  if (z0 && z0.sig === D.sig) { view.a = n - z0.ra; view.b = n - z0.rb; view.lo = z0.lo; view.hi = z0.hi; }
+} catch(e) {}
+if (!(view.b - view.a > 0.5)) { view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DEF.hi; }
+
+function persist(clear){
+  try {
+    var o = {}; try { o = JSON.parse(window.name || '{}') || {}; } catch(e) { o = {}; }
+    if (clear) { delete o.z; } else { o.z = {sig: D.sig, ra: n - view.a, rb: n - view.b, lo: view.lo, hi: view.hi}; }
+    window.name = JSON.stringify(o);
+  } catch(e) {}
+}
+function clampView(){
+  var minSpan = Math.min(5, n), maxSpan = Math.max(n * 3, 10), span = view.b - view.a, c;
+  if (span < minSpan) { c = (view.a + view.b) / 2; view.a = c - minSpan / 2; view.b = c + minSpan / 2; }
+  if (span > maxSpan) { c = (view.a + view.b) / 2; view.a = c - maxSpan / 2; view.b = c + maxSpan / 2; }
+  c = (view.a + view.b) / 2;
+  if (c < 0) { view.a -= c; view.b -= c; } else if (c > n) { view.a -= c - n; view.b -= c - n; }
+  var minY = (DEF.hi - DEF.lo) * 0.02;
+  if (view.hi - view.lo < minY) { var m = (view.hi + view.lo) / 2; view.lo = m - minY / 2; view.hi = m + minY / 2; }
+  if (D.anchorBottom) view.lo = 0;
+}
+function zoomX(f, cx){ view.a = cx - (cx - view.a) * f; view.b = cx + (view.b - cx) * f; }
+function zoomY(f, cy){ if (D.anchorBottom) cy = 0; view.lo = cy - (cy - view.lo) * f; view.hi = cy + (view.hi - cy) * f; }
+function rect(){ return stage.getBoundingClientRect(); }
+function idxAt(vx){ return view.a + (vx - L) / pw * (view.b - view.a); }
+function valAt(vy){ return view.hi - (vy - T) / ph * (view.hi - view.lo); }
+function niceStep(rng, target){
+  var raw = Math.max(rng, 1e-9) / target, mag = Math.pow(10, Math.floor(Math.log10(raw))), ms = [1, 2, 2.5, 5, 10];
+  for (var i = 0; i < ms.length; i++) { if (raw <= ms[i] * mag) return ms[i] * mag; }
+  return 10 * mag;
+}
+function pfmt(v){ return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2); }
+function spread(ys, gap){
+  var idx = ys.map(function(_, i){ return i; }).sort(function(p, q){ return ys[p] - ys[q]; }), res = ys.slice(), prev = -1e9;
+  idx.forEach(function(i){ res[i] = Math.max(res[i], prev + gap); prev = res[i]; });
+  return res;
+}
+function f1(x){ return x.toFixed(1); }
+
+function drawPrice(){
+  var a = view.a, b = view.b, lo = view.lo, hi = view.hi, span = b - a, slot = pw / span, rng = hi - lo;
+  function Y(v){ return T + (hi - v) / rng * ph; }
+  function X(i){ return L + (i - a + 0.5) * slot; }
+  var out = ['<defs><clipPath id="cp"><rect x="' + L + '" y="' + T + '" width="' + pw + '" height="' + ph + '"/></clipPath></defs>'];
+  var cl = [], ticks = [], step = niceStep(rng, 6), v = Math.ceil(lo / step) * step, g = 0;
+  while (v <= hi && g++ < 80) {
+    var y = Y(v);
+    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="#eef0f3"/>');
+    ticks.push('<text x="' + (L + pw + 4) + '" y="' + f1(y + 3) + '" font-size="10" fill="#9ca3af">' + pfmt(v) + '</text>');
+    v += step;
+  }
+  var zl = [];
+  D.zones.forEach(function(z){
+    var y1 = Y(z.hi), y2 = Y(z.lo);
+    cl.push('<rect x="' + L + '" y="' + f1(y1) + '" width="' + pw + '" height="' + f1(Math.max(y2 - y1, 2)) + '" fill="' + z.color + '" opacity="' + z.alpha + '"/>');
+    [y1, y2].forEach(function(yy){ cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(yy) + '" y2="' + f1(yy) + '" stroke="' + z.color + '" stroke-width="1" opacity="0.55"/>'); });
+    zl.push([z, y1, y2]);
+  });
+  var i0 = Math.max(0, Math.floor(a) - 1), i1 = Math.min(n - 1, Math.ceil(b) + 1), cw = Math.min(Math.max(1.2, slot * 0.7), 40);
+  for (var i = i0; i <= i1; i++) {
+    var c = D.c[i], col = c[3] >= c[0] ? '#16a34a' : '#dc2626', x = X(i), yo = Y(c[0]), yc = Y(c[3]);
+    cl.push('<g><title>' + D.tips[i] + '</title><line x1="' + f1(x) + '" x2="' + f1(x) + '" y1="' + f1(Y(c[1])) + '" y2="' + f1(Y(c[2])) + '" stroke="' + col + '"/>' +
+            '<rect x="' + f1(x - cw / 2) + '" y="' + f1(Math.min(yo, yc)) + '" width="' + f1(cw) + '" height="' + f1(Math.max(Math.abs(yo - yc), 1)) + '" fill="' + col + '"/></g>');
+  }
+  if (sel >= 0 && sel < n) { var xs = X(sel); cl.push('<line x1="' + f1(xs) + '" x2="' + f1(xs) + '" y1="' + T + '" y2="' + (T + ph) + '" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>'); }
+  zl.forEach(function(q){
+    var z = q[0], y1 = q[1], y2 = q[2];
+    if (y2 < T || y1 > T + ph) return;
+    var ty = (y2 - y1) >= 20 ? y1 + 13 : y1 - 4;
+    ty = Math.min(Math.max(ty, T + 12), T + ph - 4);
+    cl.push('<text x="' + (L + 6) + '" y="' + f1(ty) + '" font-size="11" font-weight="700" fill="' + z.color + '" stroke="#fff" stroke-width="3" paint-order="stroke">' + z.label + '</text>');
+  });
+  D.lines.forEach(function(l){
+    var y = Y(l.val);
+    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="' + l.color + '" stroke-width="1.4" stroke-dasharray="' + l.dash + '"/>');
+  });
+  out.push('<g clip-path="url(#cp)">' + cl.join('') + '</g>', ticks.join(''));
+  var tg = D.lines.map(function(l){
+    var y = Y(l.val), arrow = '';
+    if (y < T) { y = T + 9; arrow = '\u25B2 '; } else if (y > T + ph) { y = T + ph - 9; arrow = '\u25BC '; }
+    return {l: l, y: y, t: arrow + l.lab};
+  });
+  var ys = spread(tg.map(function(o){ return o.y; }), 15);
+  tg.forEach(function(o, k){
+    out.push('<rect x="' + (L + pw + 2) + '" y="' + f1(ys[k] - 8) + '" width="' + (D.R - 4) + '" height="15" rx="4" fill="' + o.l.color + '"/>' +
+             '<text x="' + (L + pw + 2 + (D.R - 4) / 2) + '" y="' + f1(ys[k] + 3) + '" font-size="' + (o.t.length > 11 ? 8.3 : 9.5) + '" font-weight="700" fill="#fff" text-anchor="middle">' + o.t + '</text>');
+  });
+  for (var k = 0; k < 5; k++) {
+    var idx = Math.round(a + span * k / 4 - 0.5);
+    if (idx < 0 || idx > n - 1) continue;
+    var xx = Math.min(Math.max(X(idx), L + 22), L + pw - 22);
+    out.push('<text x="' + f1(xx) + '" y="' + (H - 8) + '" font-size="10" fill="#6b7280" text-anchor="middle">' + D.labels[idx] + '</text>');
+  }
+  svg.innerHTML = out.join('');
+}
+
+function drawOI(){
+  var a = view.a, b = view.b, hi = view.hi, span = b - a, slot = pw / span;
+  function Y(v){ return T + (1 - v / hi) * ph; }
+  function X(i){ return L + (i - a + 0.5) * slot; }
+  function XS(s){ return X((s - D.s0) / D.sstep); }
+  var out = ['<defs><clipPath id="cp"><rect x="' + L + '" y="' + T + '" width="' + pw + '" height="' + ph + '"/></clipPath></defs>'];
+  var cl = [], step = niceStep(hi / 1e5, 5) * 1e5, t = 0, g = 0;
+  while (t <= hi && g++ < 80) {
+    var y = Y(t);
+    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="#eef0f3"/>');
+    out.push('<text x="' + (L - 4) + '" y="' + f1(y + 3) + '" font-size="10" fill="#9ca3af" text-anchor="end">' + Math.round(t / 1e5) + 'L</text>');
+    t += step;
+  }
+  var zt = [];
+  D.zones.forEach(function(z){
+    var x1 = Math.max(L, XS(z.a) - slot / 2), x2 = Math.min(L + pw, XS(z.b) + slot / 2);
+    if (x2 <= x1) return;
+    cl.push('<rect x="' + f1(x1) + '" y="' + T + '" width="' + f1(x2 - x1) + '" height="' + ph + '" fill="' + z.color + '" opacity="' + z.alpha + '"/>' +
+            '<rect x="' + f1(x1) + '" y="' + T + '" width="' + f1(x2 - x1) + '" height="' + ph + '" fill="none" stroke="' + z.color + '" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>');
+    var dem = z.key.indexOf('demand') === 0;
+    zt.push('<text x="' + f1(dem ? x2 : x1) + '" y="' + (T - 8) + '" font-size="10" font-weight="700" fill="' + z.color + '" text-anchor="' + (dem ? 'end' : 'start') + '">' + z.short + '</text>');
+  });
+  var i0 = Math.max(0, Math.floor(a) - 1), i1 = Math.min(n - 1, Math.ceil(b) + 1), bw = Math.min(Math.max(2, slot * 0.38), 30);
+  for (var i = i0; i <= i1; i++) {
+    var x = X(i);
+    cl.push('<g><title>' + D.tips[i] + '</title>' +
+            '<rect x="' + f1(x - bw - 0.5) + '" y="' + f1(Y(D.call[i])) + '" width="' + f1(bw) + '" height="' + f1(Math.max(Y(0) - Y(D.call[i]), 0)) + '" fill="#ef4444"/>' +
+            '<rect x="' + f1(x + 0.5) + '" y="' + f1(Y(D.put[i])) + '" width="' + f1(bw) + '" height="' + f1(Math.max(Y(0) - Y(D.put[i]), 0)) + '" fill="#22c55e"/></g>');
+  }
+  if (sel >= 0 && sel < n) { var xs = X(sel); cl.push('<line x1="' + f1(xs) + '" x2="' + f1(xs) + '" y1="' + T + '" y2="' + (T + ph) + '" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>'); }
+  var tags = [];
+  D.lines.forEach(function(l){
+    var x = XS(l.val);
+    if (x < L || x > L + pw) return;
+    cl.push('<line x1="' + f1(x) + '" x2="' + f1(x) + '" y1="' + (T - 36) + '" y2="' + (T + ph) + '" stroke="' + l.color + '" stroke-width="1.6" stroke-dasharray="' + l.dash + '"/>');
+    tags.push([x, l]);
+  });
+  out.push('<g clip-path="url(#cp)">' + cl.join('') + '</g>', zt.join(''));
+  var vis = Math.max(1, i1 - i0 + 1), skip = Math.max(1, Math.ceil(vis / 11));
+  for (var j = Math.max(0, Math.floor(a)); j <= Math.min(n - 1, Math.ceil(b)); j++) {
+    var isAtm = j === D.atm;
+    if (isAtm || (j % skip === 0 && Math.abs(j - D.atm) > Math.max(1, Math.floor(skip / 2)))) {
+      var lx = X(j);
+      if (lx < L + 6 || lx > L + pw - 6) continue;
+      out.push('<text x="' + f1(lx) + '" y="' + (H - 16) + '" font-size="9.5" text-anchor="middle"' + (isAtm ? ' font-weight="800" fill="#2563eb"' : ' fill="#6b7280"') + '>' + D.slabels[j] + '</text>');
+    }
+  }
+  tags.sort(function(p, q){ return p[0] - q[0]; });
+  tags.forEach(function(q, k){
+    var x = q[0], l = q[1], ty = T - 40 + (k % 2) * 16, w = 6.2 * l.lab.length + 8, bx = Math.min(Math.max(x - w / 2, L), L + pw - w);
+    out.push('<rect x="' + f1(bx) + '" y="' + f1(ty - 11) + '" width="' + f1(w) + '" height="15" rx="4" fill="' + l.color + '"/>' +
+             '<text x="' + f1(bx + w / 2) + '" y="' + f1(ty) + '" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">' + l.lab + '</text>');
+  });
+  out.push('<text x="' + (L + pw / 2) + '" y="' + (H - 2) + '" font-size="10" fill="#9ca3af" text-anchor="middle">Strike  (laal = Call OI, hara = Put OI)</text>');
+  svg.innerHTML = out.join('');
+}
+
+function draw(){ if (D.kind === 'price') drawPrice(); else drawOI(); window.__view = view; }
+function changed(){ clampView(); persist(false); draw(); }
+
+var P = {};
+function handle(e, p, zone){
+  var r = rect(), k = W / r.width;
+  var ids = Object.keys(P).filter(function(id){ return P[id].z === 'plot'; });
+  if (zone === 'plot' && ids.length >= 2) {
+    var q1 = P[ids[0]], q2 = P[ids[1]], ox1 = q1.x, oy1 = q1.y, ox2 = q2.x, oy2 = q2.y;
+    p.x = e.clientX; p.y = e.clientY; p.moved = true;
+    var odx = Math.abs(ox1 - ox2), ody = Math.abs(oy1 - oy2), ndx = Math.abs(q1.x - q2.x), ndy = Math.abs(q1.y - q2.y);
+    var mx = ((q1.x + q2.x) / 2 - r.left) * k, my = ((q1.y + q2.y) / 2 - r.top) * k;
+    if (odx >= ody) { if (ndx > 4 && odx > 4) zoomX(odx / ndx, idxAt(mx)); }
+    else if (ndy > 4 && ody > 4) { zoomY(ody / ndy, valAt(my)); }
+    changed(); return;
+  }
+  var dxv = (e.clientX - p.x) * k, dyv = (e.clientY - p.y) * k;
+  p.x = e.clientX; p.y = e.clientY;
+  if (Math.abs(e.clientX - p.sx) + Math.abs(e.clientY - p.sy) > 5) p.moved = true;
+  if (zone === 'plot') {
+    var span = view.b - view.a; view.a -= dxv / pw * span; view.b -= dxv / pw * span;
+    if (D.panY) { var yr = view.hi - view.lo; view.lo += dyv / ph * yr; view.hi += dyv / ph * yr; }
+  } else if (zone === 'yaxis') { zoomY(Math.exp(dyv * 0.008), (view.hi + view.lo) / 2); }
+  else if (zone === 'xaxis') { zoomX(Math.exp(-dxv * 0.008), (view.a + view.b) / 2); }
+  changed();
+}
+function showSel(e){
+  var r = rect(), k = W / r.width, i = Math.floor(idxAt((e.clientX - r.left) * k));
+  if (i < 0 || i >= n) { sel = -1; info.textContent = HINT; draw(); return; }
+  sel = i; info.textContent = D.tips[i]; draw();
+}
+function bind(id, zone){
+  var el = document.getElementById(id);
+  el.addEventListener('pointerdown', function(e){
+    try { el.setPointerCapture(e.pointerId); } catch(_) {}
+    P[e.pointerId] = {x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, z: zone, moved: false};
+  });
+  el.addEventListener('pointermove', function(e){ var p = P[e.pointerId]; if (p) handle(e, p, zone); });
+  el.addEventListener('pointerup', function(e){ var p = P[e.pointerId]; delete P[e.pointerId]; if (p && zone === 'plot' && !p.moved) showSel(e); });
+  el.addEventListener('pointercancel', function(e){ delete P[e.pointerId]; });
+}
+bind('zp', 'plot'); bind('za', 'yaxis'); bind('zt', 'xaxis');
+
+function wheelF(e){ return e.deltaY > 0 ? 1.12 : 1 / 1.12; }
+document.getElementById('za').addEventListener('wheel', function(e){ e.preventDefault(); zoomY(wheelF(e), (view.hi + view.lo) / 2); changed(); }, {passive: false});
+document.getElementById('zt').addEventListener('wheel', function(e){ e.preventDefault(); zoomX(wheelF(e), (view.a + view.b) / 2); changed(); }, {passive: false});
+document.getElementById('zp').addEventListener('wheel', function(e){
+  var r = rect(), k = W / r.width;
+  if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomX(wheelF(e), idxAt((e.clientX - r.left) * k)); changed(); }
+  else if (e.shiftKey) { e.preventDefault(); zoomY(wheelF(e), valAt((e.clientY - r.top) * k)); changed(); }
+}, {passive: false});
+
+function reset(){ view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DEF.hi; sel = -1; info.textContent = HINT; persist(true); draw(); }
+document.getElementById('zrs').addEventListener('click', reset);
+var zall = document.getElementById('zall');
+if (zall) zall.addEventListener('click', function(){ view.lo = D.flo; view.hi = D.fhi; changed(); });
+var zm = document.getElementById('zm'), zp = document.getElementById('zp'), zoomOn = true;
+try { var o1 = JSON.parse(window.name || '{}') || {}; if (o1.zm === 0) zoomOn = false; } catch(e) {}
+function applyMode(){
+  zp.style.touchAction = zoomOn ? 'none' : 'pan-y';
+  zm.textContent = zoomOn ? '\u270B Zoom' : '\uD83D\uDCDC Scroll';
+  zm.style.background = zoomOn ? '#16a34a' : '#475569';
+}
+zm.addEventListener('click', function(){
+  zoomOn = !zoomOn; applyMode();
+  try { var o = JSON.parse(window.name || '{}') || {}; o.zm = zoomOn ? 1 : 0; window.name = JSON.stringify(o); } catch(e) {}
+});
+applyMode();
+stage.addEventListener('dblclick', reset);
+document.getElementById('zin').addEventListener('click', function(){ zoomX(0.7, (view.a + view.b) / 2); zoomY(0.7, (view.hi + view.lo) / 2); changed(); });
+document.getElementById('zout').addEventListener('click', function(){ zoomX(1 / 0.7, (view.a + view.b) / 2); zoomY(1 / 0.7, (view.hi + view.lo) / 2); changed(); });
+
+clampView(); draw();
+})();
+</script>"""
+
+
+def _zoom_page(data):
+    W, H, L, T, pw, ph = data["W"], data["H"], data["L"], data["T"], data["pw"], data["ph"]
+    ratio = W / H
+
+    def pc(x, tot):
+        return f"{x / tot * 100:.3f}%"
+
+    ax0, ax1 = data["yax"]
     css = (
-        "<style>body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fff}"
+        "<meta charset=\"utf-8\"><style>body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fff}"
         ".sc{overflow-x:auto;padding:0 2px}"
         ".top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:6px;padding:6px 8px 0 8px}"
-        "#fsbtn{flex-shrink:0;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer}"
-        "#fsbtn:active{background:#1d4ed8}"
+        ".btns{display:flex;flex-wrap:wrap;gap:5px}"
+        ".btns button{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:13px;font-weight:700;cursor:pointer}"
+        ".btns button.g{background:#475569;padding:6px 10px}"
+        ".btns button:active{opacity:.8}"
+        "#info{font-size:11px;color:#334155;min-height:16px;padding:4px 10px 4px 10px;line-height:1.35}"
+        "#stage{position:relative;line-height:0;user-select:none;-webkit-user-select:none}"
+        ".ov{position:absolute}"
+        "#zp{touch-action:pan-y;cursor:crosshair}#za,#zt{touch-action:none}#za{cursor:ns-resize}#zt{cursor:ew-resize}"
         "#oc{background:#fff}"
         "#oc:fullscreen{overflow:auto;padding:6px}#oc:-webkit-full-screen{overflow:auto;padding:6px}"
-        "#oc:fullscreen .inner,#oc:-webkit-full-screen .inner{max-width:none!important;min-width:0!important}"
-        "#oc:fullscreen svg,#oc:-webkit-full-screen svg{height:calc(100vh - 110px);width:100%}"
+        "#oc:fullscreen .inner,#oc:-webkit-full-screen .inner{max-width:calc((100vh - 140px) * " + f"{ratio:.4f}" + ") !important;min-width:0!important}"
         "</style>"
     )
-    return (
+    hint = "2 ungli pinch = zoom | khinchein = chart khiskao | Axis par khinchein = price/time zoom | tap = data | double tap = reset"
+    html = (
         f'{css}<div id="oc"><div class="top"><div>{_legend()}</div>'
-        '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
-        f'<div class="sc"><div class="inner" style="min-width:{w}px;max-width:620px;margin:auto">{svg}</div></div></div>{FS_JS}{SCROLL_JS}'
+        '<div class="btns"><button id="zin" class="g" title="Zoom in">＋</button><button id="zout" class="g" title="Zoom out">－</button>'
+        '<button id="zrs" class="g" title="Reset">⟲</button>'
+        + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if data["kind"] == "price" else "")
+        + '<button id="zm" class="g">✋ Zoom</button><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
+        f'<div id="info">{hint}</div>'
+        '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
+        f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:#fff;display:block"></svg>'
+        f'<div id="zp" class="ov" style="left:{pc(L, W)};top:{pc(T, H)};width:{pc(pw, W)};height:{pc(ph, H)}"></div>'
+        f'<div id="za" class="ov" style="left:{pc(ax0, W)};top:{pc(T, H)};width:{pc(ax1 - ax0, W)};height:{pc(ph, H)}"></div>'
+        f'<div id="zt" class="ov" style="left:{pc(L, W)};top:{pc(T + ph, H)};width:{pc(pw, W)};height:{pc(H - T - ph, H)}"></div>'
+        '</div></div></div></div>'
     )
+    return html + ZOOM_JS.replace("__DATA__", json.dumps(data)) + FS_JS + SCROLL_JS
 
 
-def price_chart_html(c, spot, ana, xfmt="%H:%M"):
+def price_chart_html(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False):
     W, H = 440, 330
     L, R, T, B = 6, 74, 10, 26
     pw, ph = W - L - R, H - T - B
     items, lines = zone_items(ana), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
-    lo, hi = float(min(vals)), float(max(vals))
-    pad = (hi - lo) * 0.04 or 5
-    lo, hi = lo - pad, hi + pad
-
-    def Y(v):
-        return T + (hi - v) / (hi - lo) * ph
-
-    n = len(c)
-    slot = pw / n
-    cw = min(max(1.2, slot * 0.7), 14)
-    p, zlabels = [], []
-    step = _nice_step(hi - lo)
-    v = math.ceil(lo / step) * step
-    while v <= hi:
-        y = Y(v)
-        p.append(f'<line x1="{L}" x2="{L + pw}" y1="{y:.1f}" y2="{y:.1f}" stroke="#eef0f3"/>')
-        p.append(f'<text x="{L + pw + 4}" y="{y + 3:.1f}" font-size="10" fill="#9ca3af">{_pfmt(v)}</text>')
-        v += step
-
-    for it in items:                                   # zones
-        y1, y2 = Y(it["hi"]), Y(it["lo"])
-        p.append(f'<rect x="{L}" y="{y1:.1f}" width="{pw}" height="{max(y2 - y1, 2):.1f}" fill="{it["color"]}" opacity="{it["alpha"]}"/>')
-        for yy in (y1, y2):
-            p.append(f'<line x1="{L}" x2="{L + pw}" y1="{yy:.1f}" y2="{yy:.1f}" stroke="{it["color"]}" stroke-width="1" opacity="0.55"/>')
-        zlabels.append((it, y1, y2))
-
-    for i, row in enumerate(c.itertuples()):           # candles
-        col = "#16a34a" if row.close >= row.open else "#dc2626"
-        x = L + (i + 0.5) * slot
-        yo, yc = Y(row.open), Y(row.close)
-        tip = f'{row.time:%d %b %H:%M}  O {row.open:.2f}  H {row.high:.2f}  L {row.low:.2f}  C {row.close:.2f}'
-        p.append(
-            f'<g><title>{tip}</title><line x1="{x:.1f}" x2="{x:.1f}" y1="{Y(row.high):.1f}" y2="{Y(row.low):.1f}" stroke="{col}"/>'
-            f'<rect x="{x - cw / 2:.1f}" y="{min(yo, yc):.1f}" width="{cw:.1f}" height="{max(abs(yo - yc), 1):.1f}" fill="{col}"/></g>'
-        )
-
-    for it, y1, y2 in zlabels:                          # zone labels (candles ke upar)
-        ty = y1 + 13 if (y2 - y1) >= 20 else y1 - 4
-        p.append(f'<text x="{L + 6}" y="{ty:.1f}" font-size="11" font-weight="700" fill="{it["color"]}" stroke="#fff" stroke-width="3" paint-order="stroke">{it["label"]}</text>')
-
-    for lab, val, col in lines:                        # horizontal level lines
-        y = Y(val)
-        dash = "2 3" if lab.startswith("LIQ") else "5 4"
-        p.append(f'<line x1="{L}" x2="{L + pw}" y1="{y:.1f}" y2="{y:.1f}" stroke="{col}" stroke-width="1.4" stroke-dasharray="{dash}"/>')
-    ys = _spread([Y(v) for _, v, _ in lines])           # right-side tags
-    for (lab, val, col), ty in zip(lines, ys):
-        p.append(f'<rect x="{L + pw + 2}" y="{ty - 8:.1f}" width="{R - 4}" height="15" rx="4" fill="{col}"/>')
-        p.append(f'<text x="{L + pw + 2 + (R - 4) / 2}" y="{ty + 3:.1f}" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">{lab}</text>')
-
-    for k in range(6 if n > 1 else 0):                  # x labels
-        i = min(n - 1, int(k * (n - 1) / 5)) if n > 1 else 0
-        anc = "start" if k == 0 else "end" if k == 5 else "middle"
-        xx = L if k == 0 else L + pw if k == 5 else L + (i + 0.5) * slot
-        p.append(f'<text x="{xx:.1f}" y="{H - 8}" font-size="10" fill="#6b7280" text-anchor="{anc}">{c.iloc[i]["time"]:{xfmt}}</text>')
-
-    svg = f'<svg viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:#fff;display:block">{"".join(p)}</svg>'
-    return _wrap_svg(svg)
+    flo, fhi = float(min(vals)), float(max(vals))
+    fpad = (fhi - flo) * 0.04 or 5
+    flo, fhi = flo - fpad, fhi + fpad                      # saare zone + levels
+    vis = c.tail(90)                                       # default: aakhri 90 candles hi dikhao
+    cl, ch = float(vis["low"].min()), float(vis["high"].max())
+    crng = max(ch - cl, abs(float(spot)) * 0.002)
+    lo, hi = cl - crng * 0.35, ch + crng * 0.35            # candles saaf dikhein
+    if fit_all:
+        lo, hi = flo, fhi
+    rows = list(c.reset_index(drop=True).itertuples())
+    data = {
+        "kind": "price", "sig": sig, "W": W, "H": H, "L": L, "R": R, "T": T, "pw": pw, "ph": ph, "n": len(rows),
+        "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
+        "labels": [f"{r.time:{xfmt}}" for r in rows],
+        "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
+        "zones": [{"label": i["label"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
+        "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
+        "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
+        "yax": [L + pw, W], "panY": True, "anchorBottom": False,
+    }
+    return _zoom_page(data)
 
 
-def oi_chart_html(df, spot, n, ana):
+def oi_chart_html(df, spot, n, ana, sig=""):
     d = df.sort_values("Strike").reset_index(drop=True)
     ai = int((d["Strike"] - spot).abs().idxmin())
     v = d.iloc[max(ai - n, 0): ai + n + 1].reset_index(drop=True)
     W, H = 440, 340
     L, R, T, B = 32, 6, 56, 34
     pw, ph = W - L - R, H - T - B
-    m = len(v)
-    slot = pw / m
     strikes = v["Strike"].astype(float).tolist()
     sstep = min([b - a for a, b in zip(strikes, strikes[1:])] or [50])
-    s0 = strikes[0]
-    ymax = max(float(v["Call OI"].max()), float(v["Put OI"].max()), 1.0) * 1.1
-
-    def X(strike):                                      # strike -> x centre
-        return L + ((strike - s0) / sstep + 0.5) * slot
-
-    def Y(val):
-        return T + (1 - val / ymax) * ph
-
-    p = []
-    step = _nice_step(ymax / 1e5, 5) * 1e5
-    t = 0.0
-    while t <= ymax:
-        y = Y(t)
-        p.append(f'<line x1="{L}" x2="{L + pw}" y1="{y:.1f}" y2="{y:.1f}" stroke="#eef0f3"/>')
-        p.append(f'<text x="{L - 4}" y="{y + 3:.1f}" font-size="10" fill="#9ca3af" text-anchor="end">{t / 1e5:.0f}L</text>')
-        t += step
-
-    for it in zone_items(ana):                          # zones (vertical bands)
-        x1 = max(L, X(it["level"] if it["single"] else it["lo"]) - slot / 2)
-        hi_s = it["level"] if it["single"] else it["hi"]
-        x2 = min(L + pw, X(hi_s) + slot / 2)
-        if x2 <= x1:
-            continue
-        p.append(f'<rect x="{x1:.1f}" y="{T}" width="{x2 - x1:.1f}" height="{ph}" fill="{it["color"]}" opacity="{it["alpha"]}"/>')
-        p.append(f'<rect x="{x1:.1f}" y="{T}" width="{x2 - x1:.1f}" height="{ph}" fill="none" stroke="{it["color"]}" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>')
-        if it["key"].startswith("demand"):      # demand label bandh ke right-edge par (peeche ki taraf)
-            lx, anc = x2, "end"
-        else:                           # supply label bandh ke left-edge par (aage ki taraf)
-            lx, anc = x1, "start"
-        p.append(f'<text x="{lx:.1f}" y="{T - 8}" font-size="10" font-weight="700" fill="{it["color"]}" text-anchor="{anc}">{it["short"]}</text>')
-
-    bw = max(2, slot * 0.38)
-    for i, r in v.iterrows():                           # bars
-        x = L + (i + 0.5) * slot
-        tip = f'{fs(r["Strike"])}  Call OI {r["Call OI"] / 1e5:.1f}L  Put OI {r["Put OI"] / 1e5:.1f}L'
-        p.append(f'<g><title>{tip}</title>'
-                 f'<rect x="{x - bw - 0.5:.1f}" y="{Y(r["Call OI"]):.1f}" width="{bw:.1f}" height="{max(Y(0) - Y(r["Call OI"]), 0):.1f}" fill="#ef4444"/>'
-                 f'<rect x="{x + 0.5:.1f}" y="{Y(r["Put OI"]):.1f}" width="{bw:.1f}" height="{max(Y(0) - Y(r["Put OI"]), 0):.1f}" fill="#22c55e"/></g>')
-
-    skip = max(1, math.ceil(m / 11))
     atm = float(d.loc[ai, "Strike"])
-    for i, sk in enumerate(strikes):                    # x labels
-        if sk == atm or (i % skip == 0 and abs(sk - atm) > sstep * max(1, skip // 2)):
-            bold = ' font-weight="800" fill="#2563eb"' if sk == atm else ' fill="#6b7280"'
-            p.append(f'<text x="{L + (i + 0.5) * slot:.1f}" y="{H - 16}" font-size="9.5" text-anchor="middle"{bold}>{fs(sk)}</text>')
-
-    tags = []
-    for lab, val, col in level_lines(ana, spot):
-        if val == float(ana["supply"]["primary"]["strike"] if ana and ana["supply"] else -1) or \
-           val == float(ana["demand"]["primary"]["strike"] if ana and ana["demand"] else -1):
-            continue                                    # R1/S1 pehle se zone label mein
-        x = L + ((val - s0) / sstep + 0.5) * slot
-        if not (L <= x <= L + pw):
-            continue
-        dash = "2 3" if lab.startswith("LIQ") else "5 4"
-        p.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{T - 36}" y2="{T + ph}" stroke="{col}" stroke-width="1.6" stroke-dasharray="{dash}"/>')
-        tags.append((x, lab, col))
-    for k, (x, lab, col) in enumerate(sorted(tags)):
-        ty = T - 40 + (k % 2) * 16
-        w = 6.2 * len(lab) + 8
-        bx = min(max(x - w / 2, L), L + pw - w)
-        p.append(f'<rect x="{bx:.1f}" y="{ty - 11:.1f}" width="{w}" height="15" rx="4" fill="{col}"/>')
-        p.append(f'<text x="{bx + w / 2:.1f}" y="{ty:.1f}" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">{lab}</text>')
-
-    p.append(f'<text x="{L + pw / 2}" y="{H - 2}" font-size="10" fill="#9ca3af" text-anchor="middle">Strike  (laal = Call OI, hara = Put OI)</text>')
-    svg = f'<svg viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:#fff;display:block">{"".join(p)}</svg>'
-    return _wrap_svg(svg)
+    ymax = max(float(v["Call OI"].max()), float(v["Put OI"].max()), 1.0) * 1.1
+    zones = [
+        {"key": it["key"], "short": it["short"], "a": it["level"] if it["single"] else it["lo"],
+         "b": it["level"] if it["single"] else it["hi"], "color": it["color"], "alpha": it["alpha"]}
+        for it in zone_items(ana)
+    ]
+    r1 = float(ana["supply"]["primary"]["strike"]) if ana and ana["supply"] else -1
+    s1 = float(ana["demand"]["primary"]["strike"]) if ana and ana["demand"] else -1
+    lines = [
+        {"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"}
+        for lab, val, col in level_lines(ana, spot) if val != r1 and val != s1
+    ]
+    data = {
+        "kind": "oi", "sig": "oi|" + sig, "W": W, "H": H, "L": L, "R": R, "T": T, "pw": pw, "ph": ph, "n": len(strikes),
+        "s0": strikes[0], "sstep": sstep, "atm": strikes.index(atm) if atm in strikes else -1,
+        "slabels": [str(fs(s)) for s in strikes],
+        "call": [float(x) for x in v["Call OI"]], "put": [float(x) for x in v["Put OI"]],
+        "tips": [f'{fs(r["Strike"])}  Call OI {r["Call OI"] / 1e5:.1f}L  Put OI {r["Put OI"] / 1e5:.1f}L' for _, r in v.iterrows()],
+        "zones": zones, "lines": lines, "lo": 0.0, "hi": ymax, "defA": 0, "defB": len(strikes),
+        "yax": [0, L], "panY": False, "anchorBottom": True,
+    }
+    return _zoom_page(data)
 
 
 def resample_candles(c, minutes):
@@ -894,7 +1074,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             )
             fake = pd.DataFrame({"time": [pd.Timestamp.now()], "open": [spot], "high": [spot],
                                  "low": [spot], "close": [spot], "volume": [0]})
-            components.html(price_chart_html(fake, spot, ana, "%H:%M"), height=height, scrolling=True)
+            components.html(price_chart_html(fake, spot, ana, "%H:%M", f"{inst_name}|fake", fit_all=True), height=height, scrolling=True)
         else:
             if src == "intraday":
                 candles, xfmt = resample_candles(candles, tf), "%H:%M"
@@ -902,9 +1082,9 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             else:
                 xfmt = "%d %b %H:%M"
                 st.caption("Aaj intraday data nahi, isliye pichle 7 din ke 30-min candles. Laal = Supply, Hara = Demand.")
-            components.html(price_chart_html(candles.tail(200), spot, ana, xfmt), height=height, scrolling=True)
+            components.html(price_chart_html(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}"), height=height, scrolling=True)
     else:
-        components.html(oi_chart_html(df, spot, min(n_strikes, 15), ana), height=height, scrolling=True)
+        components.html(oi_chart_html(df, spot, min(n_strikes, 15), ana, inst_name), height=height, scrolling=True)
         st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
