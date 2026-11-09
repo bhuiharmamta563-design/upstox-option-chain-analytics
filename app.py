@@ -10,6 +10,7 @@ Secrets / .env keys:
   ANTHROPIC_API_KEY   = "..."   (optional, paid AI)
   GEMINI_MODEL        = "..."   (optional, default gemini-flash-latest)
 """
+import hashlib
 import json
 import math
 import os
@@ -133,15 +134,17 @@ show_summary = st.sidebar.checkbox("Strike ke baad PCR / Zone dikhao", value=Tru
 focus_mode = st.sidebar.checkbox("📺 Focus mode (sirf option chain)", value=False)
 chart_focus = st.sidebar.checkbox("📈 Charts Focus mode (sirf charts)", value=False)
 auto_refresh = st.sidebar.checkbox("🔄 Auto refresh (smooth, screen wahin rahegi)", value=False)
-refresh_secs = 10
+refresh_secs = 5
 if auto_refresh:
-    refresh_secs = st.sidebar.selectbox("Refresh kitne second mein", [5, 10, 15, 30, 60], index=1)
+    refresh_secs = st.sidebar.selectbox("Refresh kitne second mein", [1, 2, 3, 4, 5, 10, 15, 30, 60], index=4)
+    if refresh_secs < 5:
+        st.sidebar.caption("⚠️ 1-4 sec par Upstox ki limit ya slow net se dikkat ho to 5+ rakhein.")
 if st.sidebar.button("🔄 Refresh now"):
     st.cache_data.clear()
 
 
 # ---------------- Option chain data ----------------
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=1)
 def fetch_option_chain(inst_key, expiry):
     url = (
         "https://api.upstox.com/v2/option/chain"
@@ -314,10 +317,13 @@ SCROLL_JS = """
 <script>
 (function(){
   var box = document.querySelector('.wrap') || document.querySelector('.sc');
-  var s = {};
-  try { s = JSON.parse(window.name || '{}') || {}; } catch(e) { s = {}; }
-  if (box) { box.scrollLeft = s.l || 0; box.scrollTop = s.bt || 0; }
-  window.scrollTo(0, s.t || 0);
+  function restore(){
+    var s = {}; try { s = JSON.parse(window.name || '{}') || {}; } catch(e) { s = {}; }
+    if (box) { box.scrollLeft = s.l || 0; box.scrollTop = s.bt || 0; }
+    window.scrollTo(0, s.t || 0);
+  }
+  window.__restoreScroll = restore;
+  restore();
   function save(){ try { var o = {}; try { o = JSON.parse(window.name || '{}') || {}; } catch(e) { o = {}; } o.l = box ? box.scrollLeft : 0; o.bt = box ? box.scrollTop : 0; o.t = window.pageYOffset || 0; window.name = JSON.stringify(o); } catch(e){} }
   if (box) box.addEventListener('scroll', save);
   window.addEventListener('scroll', save);
@@ -355,7 +361,7 @@ def plain_cell(text, bg, bold=False):
     return f'<td style="background-color:{bg};{w}">{text}</td>'
 
 
-def build_table_html(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"):
+def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"):
     mx = {k: max(float(df[k].max()), 1.0) for k in ["Call OI", "Put OI", "Call Vol", "Put Vol"]}
     d = df.sort_values("Strike").reset_index(drop=True)
     atm_idx = int((d["Strike"] - spot).abs().idxmin())
@@ -427,7 +433,24 @@ def build_table_html(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
     if not spot_done:
         rows.append(spot_row)
 
-    css = """
+
+    put_cols = 7 if show_summary else 5
+    head1 = (
+        '<tr><th colspan="5" class="calls">CALLS</th><th></th>'
+        f'<th colspan="{put_cols}" class="puts">PUTS</th></tr>'
+    )
+    head2 = "<tr><th>IV</th><th>LTP</th><th>OI Chg (L)</th><th>OI (L)</th><th>Volume</th><th>Strike</th>"
+    head2 += "<th>Volume</th><th>OI (L)</th><th>OI Chg (L)</th><th>LTP</th>"
+    if show_summary:
+        head2 += "<th>Zone</th><th>PCR</th>"
+    head2 += "<th>IV</th></tr>"
+    minw = 1150 if show_summary else 950
+
+    return f'<table style="min-width:{minw}px">{head1}{head2}{"".join(rows)}</table>'
+
+
+# ---------------- Charts with Supply / Demand zones (pure SVG, no extra library) ----------------
+TABLE_CSS = """
     <meta charset="utf-8"><style>
       body{margin:0;font-family:Arial,Helvetica,sans-serif;}
       .wrap{overflow-x:auto;}
@@ -455,44 +478,59 @@ def build_table_html(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
       .chip{display:inline-block;font-size:10px;font-weight:700;border-radius:10px;padding:1px 7px;margin:1px;}
       .chip.r{background:#ef4444;color:#fff;} .chip.s{background:#22c55e;color:#fff;} .chip.m{background:#8b5cf6;color:#fff;} .chip.l{background:#0891b2;color:#fff;}
     </style>"""
-    put_cols = 7 if show_summary else 5
-    head1 = (
-        '<tr><th colspan="5" class="calls">CALLS</th><th></th>'
-        f'<th colspan="{put_cols}" class="puts">PUTS</th></tr>'
-    )
-    head2 = "<tr><th>IV</th><th>LTP</th><th>OI Chg (L)</th><th>OI (L)</th><th>Volume</th><th>Strike</th>"
-    head2 += "<th>Volume</th><th>OI (L)</th><th>OI Chg (L)</th><th>LTP</th>"
-    if show_summary:
-        head2 += "<th>Zone</th><th>PCR</th>"
-    head2 += "<th>IV</th></tr>"
-    minw = 1150 if show_summary else 950
-    js = """
-    <script>
-      var oc = document.getElementById('oc'), btn = document.getElementById('fsbtn');
-      function isFS(){ return document.fullscreenElement || document.webkitFullscreenElement; }
-      function toggleFS(){
-        try {
-          if (!isFS()) {
-            var f = oc.requestFullscreen || oc.webkitRequestFullscreen;
-            var p = f.call(oc);
-            if (p && p.catch) p.catch(function(){ alert('Is browser mein Full Screen support nahi. Sidebar ka Focus mode use karein.'); });
-          } else {
-            (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-          }
-        } catch(e) { alert('Is browser mein Full Screen support nahi. Sidebar ka Focus mode use karein.'); }
-      }
-      function upd(){ btn.textContent = isFS() ? '✖ Exit Full Screen' : '⛶ Full Screen'; }
-      document.addEventListener('fullscreenchange', upd);
-      document.addEventListener('webkitfullscreenchange', upd);
-    </script>"""
-    table = f'<table style="min-width:{minw}px">{head1}{head2}{"".join(rows)}</table>'
+
+TABLE_UPDATE_JS = """
+<script>
+window.__cid = 'table';
+var lastV = null, wrapEl = document.getElementById('wrap');
+window.__update = function(p){
+  if (p.v === lastV) return;
+  var first = (lastV === null); lastV = p.v;
+  wrapEl.innerHTML = p.html;
+  if (first && window.__restoreScroll) window.__restoreScroll();
+};
+</script>"""
+
+
+def table_shell_html():
+    """Ye hissa kabhi badalta nahi, isliye refresh par iframe reload nahi hota (Full Screen bana rehta hai)."""
     return (
-        f'{css}<div id="oc"><div class="bar"><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
-        f'<div class="wrap">{table}</div></div>{js}{SCROLL_JS}'
+        TABLE_CSS
+        + '<div id="oc"><div class="bar"><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
+        + '<div class="wrap" id="wrap"><div style="padding:14px;color:#6b7280;font-size:13px;font-family:Arial">Option chain load ho raha hai…</div></div></div>'
+        + FS_JS + SCROLL_JS + TABLE_UPDATE_JS
     )
 
 
-# ---------------- Charts with Supply / Demand zones (pure SVG, no extra library) ----------------
+PUSH_TEMPLATE = """
+<script>
+(function(){
+  var CID = "__CID__", PAYLOAD = __PAYLOAD__;
+  function findShell(){
+    try {
+      var fr = window.parent.document.querySelectorAll('iframe');
+      for (var i = 0; i < fr.length; i++) {
+        try { var w = fr[i].contentWindow; if (w && w.__cid === CID && w.__update) return w; } catch(e) {}
+      }
+    } catch(e) {}
+    return null;
+  }
+  function tick(){ var w = findShell(); if (w) { try { w.__update(PAYLOAD); } catch(e) {} } }
+  tick(); setInterval(tick, 600);
+})();
+</script>"""
+
+
+def push_html(cid, payload):
+    """Naya data chhupe hue (height=0) iframe se dikhne wale chart/table mein JS se daal diya jata hai."""
+    payload = dict(payload)
+    raw = json.dumps(payload, sort_keys=True, default=float)
+    payload["v"] = hashlib.md5(raw.encode()).hexdigest()
+    body = json.dumps(payload, default=float).replace("</", "<\\/")
+    return PUSH_TEMPLATE.replace("__CID__", cid).replace("__PAYLOAD__", body)
+
+
+
 def _strength_txt(score):
     return "Strong" if score >= 70 else "Medium" if score >= 45 else "Weak"
 
@@ -577,11 +615,11 @@ FS_JS = """
       if (!isFS()) {
         var f = oc.requestFullscreen || oc.webkitRequestFullscreen;
         var p = f.call(oc);
-        if (p && p.catch) p.catch(function(){ alert('Is browser mein Full Screen support nahi. Sidebar ka Charts Focus mode use karein.'); });
+        if (p && p.catch) p.catch(function(){ alert('Is browser mein Full Screen support nahi. Sidebar ka Focus mode use karein.'); });
       } else {
         (document.exitFullscreen || document.webkitExitFullscreen).call(document);
       }
-    } catch(e) { alert('Is browser mein Full Screen support nahi. Sidebar ka Charts Focus mode use karein.'); }
+    } catch(e) { alert('Is browser mein Full Screen support nahi. Sidebar ka Focus mode use karein.'); }
   }
   function upd(){ btn.textContent = isFS() ? '✖ Exit Full Screen' : '⛶ Full Screen'; }
   document.addEventListener('fullscreenchange', upd);
@@ -592,18 +630,31 @@ FS_JS = """
 ZOOM_JS = r"""
 <script>
 (function(){
-var D = __DATA__;
+var CFG = __CFG__;
 var svg = document.getElementById('svg'), stage = document.getElementById('stage'), info = document.getElementById('info');
-var n = D.n, L = D.L, T = D.T, W = D.W, H = D.H, pw = D.pw, ph = D.ph;
-var DEF = {a: D.defA, b: D.defB, lo: D.lo, hi: D.hi};
-var view = {a: DEF.a, b: DEF.b, lo: DEF.lo, hi: DEF.hi}, sel = -1, HINT = info.textContent;
-try {
-  var o0 = JSON.parse(window.name || '{}') || {}, z0 = o0.z;
-  if (z0 && z0.sig === D.sig) { view.a = n - z0.ra; view.b = n - z0.rb; view.lo = z0.lo; view.hi = z0.hi; }
-} catch(e) {}
-if (!(view.b - view.a > 0.5)) { view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DEF.hi; }
+var W = CFG.W, H = CFG.H, L = CFG.L, T = CFG.T, pw = CFG.pw, ph = CFG.ph;
+var D = null, n = 0, sel = -1, touched = false, lastV = null, HINT = info.textContent;
+var DEF = {a: 0, b: 1, lo: 0, hi: 1}, view = {a: 0, b: 1, lo: 0, hi: 1};
+function copyDef(){ return {a: DEF.a, b: DEF.b, lo: DEF.lo, hi: DEF.hi}; }
+function setData(nd){
+  var oldN = n, same = (D !== null) && D.sig === nd.sig;
+  D = nd; n = D.n;
+  DEF = {a: D.defA, b: D.defB, lo: D.lo, hi: D.hi};
+  if (!same) {
+    view = copyDef(); touched = false; sel = -1;
+    try {
+      var o0 = JSON.parse(window.name || '{}') || {}, z0 = o0.z;
+      if (z0 && z0.sig === D.sig) { view.a = n - z0.ra; view.b = n - z0.rb; view.lo = z0.lo; view.hi = z0.hi; touched = true; }
+    } catch(e) {}
+    if (!(view.b - view.a > 0.5)) { view = copyDef(); touched = false; }
+  } else if (touched) {
+    var sh = n - oldN; view.a += sh; view.b += sh;
+  } else { view = copyDef(); }
+  clampView(); draw();
+}
 
 function persist(clear){
+  touched = !clear;
   try {
     var o = {}; try { o = JSON.parse(window.name || '{}') || {}; } catch(e) { o = {}; }
     if (clear) { delete o.z; } else { o.z = {sig: D.sig, ra: n - view.a, rb: n - view.b, lo: view.lo, hi: view.hi}; }
@@ -618,10 +669,10 @@ function clampView(){
   if (c < 0) { view.a -= c; view.b -= c; } else if (c > n) { view.a -= c - n; view.b -= c - n; }
   var minY = (DEF.hi - DEF.lo) * 0.02;
   if (view.hi - view.lo < minY) { var m = (view.hi + view.lo) / 2; view.lo = m - minY / 2; view.hi = m + minY / 2; }
-  if (D.anchorBottom) view.lo = 0;
+  if (CFG.anchorBottom) view.lo = 0;
 }
 function zoomX(f, cx){ view.a = cx - (cx - view.a) * f; view.b = cx + (view.b - cx) * f; }
-function zoomY(f, cy){ if (D.anchorBottom) cy = 0; view.lo = cy - (cy - view.lo) * f; view.hi = cy + (view.hi - cy) * f; }
+function zoomY(f, cy){ if (CFG.anchorBottom) cy = 0; view.lo = cy - (cy - view.lo) * f; view.hi = cy + (view.hi - cy) * f; }
 function rect(){ return stage.getBoundingClientRect(); }
 function idxAt(vx){ return view.a + (vx - L) / pw * (view.b - view.a); }
 function valAt(vy){ return view.hi - (vy - T) / ph * (view.hi - view.lo); }
@@ -683,8 +734,8 @@ function drawPrice(){
   });
   var ys = spread(tg.map(function(o){ return o.y; }), 15);
   tg.forEach(function(o, k){
-    out.push('<rect x="' + (L + pw + 2) + '" y="' + f1(ys[k] - 8) + '" width="' + (D.R - 4) + '" height="15" rx="4" fill="' + o.l.color + '"/>' +
-             '<text x="' + (L + pw + 2 + (D.R - 4) / 2) + '" y="' + f1(ys[k] + 3) + '" font-size="' + (o.t.length > 11 ? 8.3 : 9.5) + '" font-weight="700" fill="#fff" text-anchor="middle">' + o.t + '</text>');
+    out.push('<rect x="' + (L + pw + 2) + '" y="' + f1(ys[k] - 8) + '" width="' + (CFG.R - 4) + '" height="15" rx="4" fill="' + o.l.color + '"/>' +
+             '<text x="' + (L + pw + 2 + (CFG.R - 4) / 2) + '" y="' + f1(ys[k] + 3) + '" font-size="' + (o.t.length > 11 ? 8.3 : 9.5) + '" font-weight="700" fill="#fff" text-anchor="middle">' + o.t + '</text>');
   });
   for (var k = 0; k < 5; k++) {
     var idx = Math.round(a + span * k / 4 - 0.5);
@@ -752,7 +803,7 @@ function drawOI(){
   svg.innerHTML = out.join('');
 }
 
-function draw(){ if (D.kind === 'price') drawPrice(); else drawOI(); window.__view = view; }
+function draw(){ if (!D) return; if (CFG.kind === 'price') drawPrice(); else drawOI(); window.__view = view; }
 function changed(){ clampView(); persist(false); draw(); }
 
 var P = {};
@@ -773,7 +824,7 @@ function handle(e, p, zone){
   if (Math.abs(e.clientX - p.sx) + Math.abs(e.clientY - p.sy) > 5) p.moved = true;
   if (zone === 'plot') {
     var span = view.b - view.a; view.a -= dxv / pw * span; view.b -= dxv / pw * span;
-    if (D.panY) { var yr = view.hi - view.lo; view.lo += dyv / ph * yr; view.hi += dyv / ph * yr; }
+    if (CFG.panY) { var yr = view.hi - view.lo; view.lo += dyv / ph * yr; view.hi += dyv / ph * yr; }
   } else if (zone === 'yaxis') { zoomY(Math.exp(dyv * 0.008), (view.hi + view.lo) / 2); }
   else if (zone === 'xaxis') { zoomX(Math.exp(-dxv * 0.008), (view.a + view.b) / 2); }
   changed();
@@ -807,7 +858,7 @@ document.getElementById('zp').addEventListener('wheel', function(e){
 function reset(){ view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DEF.hi; sel = -1; info.textContent = HINT; persist(true); draw(); }
 document.getElementById('zrs').addEventListener('click', reset);
 var zall = document.getElementById('zall');
-if (zall) zall.addEventListener('click', function(){ view.lo = D.flo; view.hi = D.fhi; changed(); });
+if (zall) zall.addEventListener('click', function(){ if (D) { view.lo = D.flo; view.hi = D.fhi; changed(); } });
 var zm = document.getElementById('zm'), zp = document.getElementById('zp'), zoomOn = true;
 try { var o1 = JSON.parse(window.name || '{}') || {}; if (o1.zm === 0) zoomOn = false; } catch(e) {}
 function applyMode(){
@@ -824,19 +875,41 @@ stage.addEventListener('dblclick', reset);
 document.getElementById('zin').addEventListener('click', function(){ zoomX(0.7, (view.a + view.b) / 2); zoomY(0.7, (view.hi + view.lo) / 2); changed(); });
 document.getElementById('zout').addEventListener('click', function(){ zoomX(1 / 0.7, (view.a + view.b) / 2); zoomY(1 / 0.7, (view.hi + view.lo) / 2); changed(); });
 
-clampView(); draw();
+window.__cid = CFG.kind;
+window.__update = function(p){
+  if (p.v === lastV) return;
+  var first = (lastV === null); lastV = p.v;
+  setData(p.data);
+  var w = document.getElementById('wait'); if (w) w.style.display = 'none';
+  if (first && window.__restoreScroll) window.__restoreScroll();
+};
 })();
 </script>"""
 
 
-def _zoom_page(data):
-    W, H, L, T, pw, ph = data["W"], data["H"], data["L"], data["T"], data["pw"], data["ph"]
+_CHART_CFG = {
+    "price": {"kind": "price", "W": 440, "H": 330, "L": 6, "R": 74, "T": 10, "B": 26, "panY": True, "anchorBottom": False},
+    "oi": {"kind": "oi", "W": 440, "H": 340, "L": 32, "R": 6, "T": 56, "B": 34, "panY": False, "anchorBottom": True},
+}
+
+
+def _cfg(kind):
+    c = dict(_CHART_CFG[kind])
+    c["pw"], c["ph"] = c["W"] - c["L"] - c["R"], c["H"] - c["T"] - c["B"]
+    c["yax"] = [c["L"] + c["pw"], c["W"]] if kind == "price" else [0, c["L"]]
+    return c
+
+
+def zoom_shell_html(kind):
+    """Chart ka dhancha: kabhi badalta nahi, isliye refresh par chart reload/chhota nahi hota."""
+    cfg = _cfg(kind)
+    W, H, L, T, pw, ph = cfg["W"], cfg["H"], cfg["L"], cfg["T"], cfg["pw"], cfg["ph"]
     ratio = W / H
 
     def pc(x, tot):
         return f"{x / tot * 100:.3f}%"
 
-    ax0, ax1 = data["yax"]
+    ax0, ax1 = cfg["yax"]
     css = (
         "<meta charset=\"utf-8\"><style>body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fff}"
         ".sc{overflow-x:auto;padding:0 2px}"
@@ -846,6 +919,7 @@ def _zoom_page(data):
         ".btns button.g{background:#475569;padding:6px 10px}"
         ".btns button:active{opacity:.8}"
         "#info{font-size:11px;color:#334155;min-height:16px;padding:4px 10px 4px 10px;line-height:1.35}"
+        "#wait{font-size:13px;color:#6b7280;padding:14px 10px}"
         "#stage{position:relative;line-height:0;user-select:none;-webkit-user-select:none}"
         ".ov{position:absolute}"
         "#zp{touch-action:pan-y;cursor:crosshair}#za,#zt{touch-action:none}#za{cursor:ns-resize}#zt{cursor:ew-resize}"
@@ -859,9 +933,9 @@ def _zoom_page(data):
         f'{css}<div id="oc"><div class="top"><div>{_legend()}</div>'
         '<div class="btns"><button id="zin" class="g" title="Zoom in">＋</button><button id="zout" class="g" title="Zoom out">－</button>'
         '<button id="zrs" class="g" title="Reset">⟲</button>'
-        + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if data["kind"] == "price" else "")
+        + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
         + '<button id="zm" class="g">✋ Zoom</button><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
-        f'<div id="info">{hint}</div>'
+        f'<div id="info">{hint}</div><div id="wait">Chart load ho raha hai…</div>'
         '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
         f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:#fff;display:block"></svg>'
         f'<div id="zp" class="ov" style="left:{pc(L, W)};top:{pc(T, H)};width:{pc(pw, W)};height:{pc(ph, H)}"></div>'
@@ -869,13 +943,10 @@ def _zoom_page(data):
         f'<div id="zt" class="ov" style="left:{pc(L, W)};top:{pc(T + ph, H)};width:{pc(pw, W)};height:{pc(H - T - ph, H)}"></div>'
         '</div></div></div></div>'
     )
-    return html + ZOOM_JS.replace("__DATA__", json.dumps(data)) + FS_JS + SCROLL_JS
+    return html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
 
 
-def price_chart_html(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False):
-    W, H = 440, 330
-    L, R, T, B = 6, 74, 10, 26
-    pw, ph = W - L - R, H - T - B
+def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False):
     items, lines = zone_items(ana), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
     flo, fhi = float(min(vals)), float(max(vals))
@@ -888,26 +959,21 @@ def price_chart_html(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False):
     if fit_all:
         lo, hi = flo, fhi
     rows = list(c.reset_index(drop=True).itertuples())
-    data = {
-        "kind": "price", "sig": sig, "W": W, "H": H, "L": L, "R": R, "T": T, "pw": pw, "ph": ph, "n": len(rows),
+    return {
+        "sig": sig, "n": len(rows),
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
         "labels": [f"{r.time:{xfmt}}" for r in rows],
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
         "zones": [{"label": i["label"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
         "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
-        "yax": [L + pw, W], "panY": True, "anchorBottom": False,
     }
-    return _zoom_page(data)
 
 
-def oi_chart_html(df, spot, n, ana, sig=""):
+def oi_chart_data(df, spot, n, ana, sig=""):
     d = df.sort_values("Strike").reset_index(drop=True)
     ai = int((d["Strike"] - spot).abs().idxmin())
     v = d.iloc[max(ai - n, 0): ai + n + 1].reset_index(drop=True)
-    W, H = 440, 340
-    L, R, T, B = 32, 6, 56, 34
-    pw, ph = W - L - R, H - T - B
     strikes = v["Strike"].astype(float).tolist()
     sstep = min([b - a for a, b in zip(strikes, strikes[1:])] or [50])
     atm = float(d.loc[ai, "Strike"])
@@ -923,16 +989,14 @@ def oi_chart_html(df, spot, n, ana, sig=""):
         {"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"}
         for lab, val, col in level_lines(ana, spot) if val != r1 and val != s1
     ]
-    data = {
-        "kind": "oi", "sig": "oi|" + sig, "W": W, "H": H, "L": L, "R": R, "T": T, "pw": pw, "ph": ph, "n": len(strikes),
+    return {
+        "sig": "oi|" + sig, "n": len(strikes),
         "s0": strikes[0], "sstep": sstep, "atm": strikes.index(atm) if atm in strikes else -1,
         "slabels": [str(fs(s)) for s in strikes],
         "call": [float(x) for x in v["Call OI"]], "put": [float(x) for x in v["Put OI"]],
         "tips": [f'{fs(r["Strike"])}  Call OI {r["Call OI"] / 1e5:.1f}L  Put OI {r["Put OI"] / 1e5:.1f}L' for _, r in v.iterrows()],
         "zones": zones, "lines": lines, "lo": 0.0, "hi": ymax, "defA": 0, "defB": len(strikes),
-        "yax": [0, L], "panY": False, "anchorBottom": True,
     }
-    return _zoom_page(data)
 
 
 def resample_candles(c, minutes):
@@ -1049,7 +1113,7 @@ def ask_ai(summary_text):
 
 
 # ---------------- Candles (price chart ke liye) ----------------
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=3)
 def fetch_candles(inst_key):
     key = enc(inst_key)
 
@@ -1088,6 +1152,11 @@ def fetch_candles(inst_key):
         return pd.DataFrame(), "error", f"{err} {e}".strip()
 
 
+def render_table(df, spot, n, ana, show_summary, label, height):
+    components.html(table_shell_html(), height=height, scrolling=True)
+    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label)}), height=0)
+
+
 def render_charts(df, spot, ana, n_strikes, height=440):
     view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones"], horizontal=True)
     if view.startswith("📈"):
@@ -1098,9 +1167,9 @@ def render_charts(df, spot, ana, n_strikes, height=440):
                 "Candle data nahi mila, isliye sirf zones aur levels dikha raha hoon. "
                 f"Upstox ka jawab: {err or 'khali'}"
             )
-            fake = pd.DataFrame({"time": [pd.Timestamp.now()], "open": [spot], "high": [spot],
+            fake = pd.DataFrame({"time": [pd.Timestamp("2000-01-01")], "open": [spot], "high": [spot],
                                  "low": [spot], "close": [spot], "volume": [0]})
-            components.html(price_chart_html(fake, spot, ana, "%H:%M", f"{inst_name}|fake", fit_all=True), height=height, scrolling=True)
+            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", fit_all=True)
         else:
             if src == "intraday":
                 candles, xfmt = resample_candles(candles, tf), "%H:%M"
@@ -1108,9 +1177,12 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             else:
                 xfmt = "%d %b %H:%M"
                 st.caption("Aaj intraday data nahi, isliye pichle 7 din ke 30-min candles. Laal = Supply, Hara = Demand.")
-            components.html(price_chart_html(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}"), height=height, scrolling=True)
+            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}")
+        components.html(zoom_shell_html("price"), height=height, scrolling=True)
+        components.html(push_html("price", {"data": data}), height=0)
     else:
-        components.html(oi_chart_html(df, spot, min(n_strikes, 15), ana, inst_name), height=height, scrolling=True)
+        components.html(zoom_shell_html("oi"), height=height, scrolling=True)
+        components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name)}), height=0)
         st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
@@ -1126,11 +1198,7 @@ def render_page():
 
         if focus_mode:
             st.caption(f"{inst_name} Spot {spot:,.2f} | Expiry {expiry_date} | PCR {ana['pcr']:.2f}")
-            components.html(
-                build_table_html(df, spot, n_strikes, ana, show_summary, inst_name),
-                height=min(160 + (2 * n_strikes + 2) * 50, 2200),
-                scrolling=True,
-            )
+            render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(160 + (2 * n_strikes + 2) * 50, 2200))
             return
 
         if chart_focus:
@@ -1247,8 +1315,7 @@ def render_page():
             "Peela = ITM | Neela strike = ATM | Laal strike = Supply zone | Hara strike = Demand zone | "
             "Orange line = spot (market yahan chal raha hai)"
         )
-        html = build_table_html(df, spot, n_strikes, ana, show_summary, inst_name)
-        components.html(html, height=min(140 + (2 * n_strikes + 2) * 50, 1100), scrolling=True)
+        render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
 
         # ---- Charts with Supply / Demand zones ----
         st.markdown("---")
