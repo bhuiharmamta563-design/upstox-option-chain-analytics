@@ -979,37 +979,63 @@ def ask_claude(summary_text):
 
 def get_secret(name):
     try:
-        return st.secrets[name]
+        v = st.secrets[name]
     except Exception:
-        return os.getenv(name)
+        v = os.getenv(name)
+    if isinstance(v, str):                       # galti se aaye space / quotes hata do
+        v = v.strip().strip('"').strip("'").strip()
+    return v
 
 
 def ask_gemini(summary_text):
-    """FREE option: Google Gemini (Google AI Studio key)."""
+    """FREE option: Google Gemini. Do tarah ki key chalti hai:
+       - 'AIza...'  : Google AI Studio key (generativelanguage endpoint)
+       - 'AQ.Ab8...': Vertex AI express-mode key (aiplatform endpoint)"""
     key = get_secret("GEMINI_API_KEY")
     if not key:
         return None, "GEMINI_API_KEY nahi mila."
-    model = get_secret("GEMINI_MODEL") or "gemini-flash-latest"
+    vertex = key.startswith("AQ.")
     prompt = (
         "Tum ek experienced Indian options market analyst ho. Neeche option chain ka analysis data hai. "
         "Hinglish mein short, clear analysis do: market bias, supply zone (resistance), demand zone (support), "
         "breakout/breakdown ke levels, aur risk. Last mein 1 line disclaimer do (financial advice nahi hai).\n\n"
         + summary_text
     )
-    try:
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=60,
-        )
-        data = r.json()
-        if "candidates" not in data:
-            return None, f"Gemini error: {data.get('error', {}).get('message', data)}"
-        parts = data["candidates"][0]["content"]["parts"]
-        return "".join(p.get("text", "") for p in parts), None
-    except Exception as e:
-        return None, str(e)
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    models = [get_secret("GEMINI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+    last = ""
+    for model in dict.fromkeys(m for m in models if m):
+        try:
+            if vertex:
+                r = requests.post(
+                    f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
+                    params={"key": key}, headers={"Content-Type": "application/json"}, json=body, timeout=60,
+                )
+            else:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body, timeout=60,
+                )
+            data = r.json()
+        except Exception as e:
+            return None, str(e)
+        if "candidates" in data:
+            try:
+                parts = data["candidates"][0]["content"]["parts"]
+                return "".join(p.get("text", "") for p in parts), None
+            except Exception:
+                last = f"{model}: khali jawab"
+                continue
+        err = data.get("error", {}) if isinstance(data, dict) else {}
+        msg = str(err.get("message", data))[:220]
+        last = f"{model}: {msg}"
+        if err.get("code") in (400, 401, 403) and ("API key" in msg or "credentials" in msg or "authentication" in msg.lower()):
+            break                                # key ka masla hai, doosra model try karna bekaar
+    hint = ""
+    if "API key" in last or "credentials" in last:
+        hint = (" | Key sahi copy karein: AI Studio key 'AIza' se, Vertex express key 'AQ.' se shuru hoti hai. "
+                "Secrets mein double quotes ke andar daalein aur app Reboot karein.")
+    return None, f"Gemini error: {last}{hint}"
 
 
 def ask_ai(summary_text):
