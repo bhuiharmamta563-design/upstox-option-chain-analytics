@@ -131,6 +131,8 @@ st.sidebar.header("Settings")
 expiry_date = st.sidebar.selectbox("Select Expiry Date", expiry_options)
 n_strikes = st.sidebar.slider("ATM ke upar/niche strikes", 5, 30, 10)
 show_summary = st.sidebar.checkbox("Strike ke baad PCR / Zone dikhao", value=True)
+zone_pts = st.sidebar.number_input("Zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
+                                   help="0 = auto: spot ka 0.08% (Nifty par lagbhag 20 points, BankNifty ~40, Sensex ~65). Apni marzi ke points bhi likh sakte hain.")
 focus_mode = st.sidebar.checkbox("📺 Focus mode (sirf option chain)", value=False)
 chart_focus = st.sidebar.checkbox("📈 Charts Focus mode (sirf charts)", value=False)
 auto_refresh = st.sidebar.checkbox("🔄 Auto refresh (smooth, screen wahin rahegi)", value=False)
@@ -188,15 +190,32 @@ def fs(x):
     return int(x) if x == int(x) else round(x, 2)
 
 
+def zone_size_txt(z):
+    return f"{fs(z['width'])} points"
+
+
+def zone_dist_txt(z, side):
+    d = z["dist"]
+    if d < 0:
+        return "spot zone ke andar / paar"
+    return f"{fs(round(d, 1))} points " + ("upar" if side == "supply" else "niche")
+
+
 def strength_label(score):
     return "Strong 💪" if score >= 70 else "Medium 👍" if score >= 45 else "Weak ⚠️"
 
 
-def analyze(df, spot):
+def analyze(df, spot, zone_pts=0.0):
     d = df.sort_values("Strike").reset_index(drop=True).copy()
     diffs = np.diff(d["Strike"].astype(float).values)
     diffs = diffs[diffs > 0]
     step = float(diffs.min()) if len(diffs) else 50.0          # strike gap (Nifty 50, BankNifty 100, stock 2.5...)
+
+    # Zone ki chaudai (points): user ne di ho to wahi, warna auto = spot ka 0.08% (Nifty par ~20 points)
+    w = float(zone_pts) if zone_pts and zone_pts > 0 else float(spot) * 0.0008
+    w = round(w) if w >= 1 else round(w, 2)
+    w = max(w, 0.01)
+    half = w / 2
 
     # Score = 50% OI + 30% Volume + 20% fresh OI addition (0-100)
     for side in ("Call", "Put"):
@@ -215,25 +234,26 @@ def analyze(df, spot):
         top = cand.iloc[0]
         if avoid and float(top[f"{side} Score"]) < 20:   # bahut kamzor ho to zone 2 nahi
             return None
-        cluster = cand[(cand["Strike"] - top["Strike"]).abs() <= 2 * step].head(3)
-        levels = []
-        for _, r in cluster.iterrows():
-            chg = float(r[f"{side} OI Chg"])
-            levels.append({
-                "strike": fs(r["Strike"]),
-                "score": float(r[f"{side} Score"]),
-                "oi": float(r[f"{side} OI"]),
-                "vol": float(r[f"{side} Vol"]),
-                "chg": chg,
-                "fresh": chg > 0,
-            })
-        return {
+        chg = float(top[f"{side} OI Chg"])
+        k = float(top["Strike"])
+        levels = [{
+            "strike": fs(k),
+            "score": float(top[f"{side} Score"]),
+            "oi": float(top[f"{side} OI"]),
+            "vol": float(top[f"{side} Vol"]),
+            "chg": chg,
+            "fresh": chg > 0,
+        }]
+        z = {                                       # zone = sabse mazboot strike ke aas-paas w points ki patti
             "primary": levels[0],
-            "low": min(l["strike"] for l in levels),
-            "high": max(l["strike"] for l in levels),
+            "low": round(k - half, 2),
+            "high": round(k + half, 2),
             "levels": levels,
             "score": levels[0]["score"],
+            "width": w,
         }
+        z["dist"] = (z["low"] - spot) if side == "Call" else (spot - z["high"])   # spot se kitne points door
+        return z
 
     supply = zone("Call", d["Strike"] >= spot)   # Resistance (Call writers)
     demand = zone("Put", d["Strike"] <= spot)    # Support (Put writers)
@@ -342,9 +362,22 @@ def fmt_vol(v):
     return f"{int(v)}"
 
 
+HI_COLOR, MID_COLOR = "#7c3aed", "#c4b5fd"      # sabse zyada (100%) / 75% se upar
+
+
 def bar_cell(text, pct, bg, color, direction, top_cls):
+    if pct >= 99.5:                                  # sabse zyada OI / Volume (badge '100%' ke barabar)
+        return (
+            f'<td style="background-color:{HI_COLOR};color:#fff">'
+            f'<div class="v">{text}</div><div class="pb hi">{pct:.0f}%</div></td>'
+        )
+    if pct >= 74.5:                                  # 75% se upar: saaf ek rang (bina bar ke)
+        return (
+            f'<td style="background-color:{MID_COLOR}">'
+            f'<div class="v">{text}</div><div class="pb mid">{pct:.0f}%</div></td>'
+        )
+    cls = "pb"
     grad = f"linear-gradient({direction}, {color} {pct:.0f}%, transparent {pct:.0f}%)"
-    cls = "pb top-" + top_cls if pct >= 99.9 else "pb"
     return (
         f'<td style="background-color:{bg};background-image:{grad}">'
         f'<div class="v">{text}</div><div class="{cls}">{pct:.0f}%</div></td>'
@@ -401,7 +434,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
         cbg = ITM if s < spot else NORM
         pbg = ITM if s > spot else NORM
         is_atm = s == atm_strike
-        strike_bg = zone_bg.get(fs(s), "#bfdbfe" if is_atm else "#f3f4f6")
+        strike_bg = "#e5e7eb"                              # saare strike ek hi color
 
         zone_td, pcr_td = "", ""
         if show_summary:
@@ -472,6 +505,8 @@ TABLE_CSS = """
       .pb{display:inline-block;font-size:9px;color:#15803d;border:1px solid #86efac;border-radius:4px;padding:0 3px;margin-top:2px;background:#f0fdf4;}
       .pb.top-red{color:#b91c1c;border-color:#f87171;background:#fef2f2;font-weight:700;}
       .pb.top-green{color:#166534;border-color:#22c55e;background:#dcfce7;font-weight:700;}
+      .pb.hi{color:#6d28d9;border-color:#c4b5fd;background:#fff;font-weight:800;}
+      .pb.mid{color:#5b21b6;border-color:#a78bfa;background:#ede9fe;font-weight:700;}
       tr.atm td{border-top:2px solid #3b82f6;border-bottom:2px solid #3b82f6;}
       tr.spotrow td{background:linear-gradient(90deg,#f97316,#ef4444,#f97316);color:#fff;font-weight:800;
                     padding:4px;font-size:12px;letter-spacing:1px;border:none;}
@@ -540,7 +575,6 @@ def _pfmt(v):
 
 
 def zone_items(ana):
-    step = float((ana or {}).get("step", 50))
     items = []
     for key, name, short, col, alpha in (
         ("supply", "SUPPLY 1", "SUP1", "#ef4444", 0.17), ("supply2", "SUPPLY 2", "SUP2", "#f87171", 0.09),
@@ -549,14 +583,9 @@ def zone_items(ana):
         z = (ana or {}).get(key)
         if not z:
             continue
-        lo, hi = float(z["low"]), float(z["high"])
-        rng = f"{z['low']}-{z['high']}" if z["low"] != z["high"] else f"{z['low']}"
-        label = f"{name} {rng} ({_strength_txt(z['score'])})"
-        single = (hi - lo) < 0.4 * step
-        if single:                            # single strike -> thodi moti patti
-            lo, hi = lo - 0.2 * step, hi + 0.2 * step
-        items.append({"label": label, "short": short, "lo": lo, "hi": hi, "color": col, "alpha": alpha,
-                      "level": z["primary"]["strike"], "key": key, "single": single})
+        label = f"{name} {fs(z['low'])}-{fs(z['high'])} ({_strength_txt(z['score'])}, {fs(z['width'])}p)"
+        items.append({"label": label, "short": short, "lo": float(z["low"]), "hi": float(z["high"]), "color": col,
+                      "alpha": alpha, "level": z["primary"]["strike"], "key": key, "single": True})
     return items
 
 
@@ -715,12 +744,11 @@ function drawPrice(){
             '<rect x="' + f1(x - cw / 2) + '" y="' + f1(Math.min(yo, yc)) + '" width="' + f1(cw) + '" height="' + f1(Math.max(Math.abs(yo - yc), 1)) + '" fill="' + col + '"/></g>');
   }
   if (sel >= 0 && sel < n) { var xs = X(sel); cl.push('<line x1="' + f1(xs) + '" x2="' + f1(xs) + '" y1="' + T + '" y2="' + (T + ph) + '" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>'); }
-  zl.forEach(function(q){
-    var z = q[0], y1 = q[1], y2 = q[2];
-    if (y2 < T || y1 > T + ph) return;
-    var ty = (y2 - y1) >= 20 ? y1 + 13 : y1 - 4;
-    ty = Math.min(Math.max(ty, T + 12), T + ph - 4);
-    cl.push('<text x="' + (L + 6) + '" y="' + f1(ty) + '" font-size="11" font-weight="700" fill="' + z.color + '" stroke="#fff" stroke-width="3" paint-order="stroke">' + z.label + '</text>');
+  var zv = zl.filter(function(q){ return !(q[2] < T || q[1] > T + ph); });
+  var zy = zv.map(function(q){ var t = (q[2] - q[1]) >= 20 ? q[1] + 13 : q[1] - 4; return Math.min(Math.max(t, T + 12), T + ph - 4); });
+  zy = spread(zy, 13);
+  zv.forEach(function(q, k){
+    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + q[0].color + '" stroke="#fff" stroke-width="3" paint-order="stroke">' + q[0].label + '</text>');
   });
   D.lines.forEach(function(l){
     var y = Y(l.val);
@@ -1193,7 +1221,7 @@ def render_page():
     if df.empty:
         st.warning(f"⚠️ {inst_name} ka data load nahi hua! Upstox Access Token check karein. Stock ho to uske F&O options na hon ya symbol badal gaya ho to bhi data nahi aata.")
     else:
-        ana = analyze(df, spot)
+        ana = analyze(df, spot, zone_pts)
         supply, demand = ana["supply"], ana["demand"]
 
         if focus_mode:
@@ -1225,8 +1253,9 @@ def render_page():
             z1.markdown(
                 f'<div style="background:#fef2f2;color:#111;border-left:6px solid #ef4444;padding:12px;border-radius:8px">'
                 f'<b>🔴 SUPPLY ZONE (Resistance)</b><br>'
-                f'<span style="font-size:24px;font-weight:800">{supply["low"]} – {supply["high"]}</span><br>'
+                f'<span style="font-size:24px;font-weight:800">{fs(supply["low"])} – {fs(supply["high"])}</span><br>'
                 f'Main level R1: <b>{p["strike"]}</b> • {strength_label(p["score"])}<br>'
+                f'📏 Zone size: <b>{zone_size_txt(supply)}</b> • Spot se: <b>{zone_dist_txt(supply, "supply")}</b><br>'
                 f'Call OI: {p["oi"] / 1e5:.1f}L • Chg: {p["chg"] / 1e5:+.1f}L • Vol: {fmt_vol(p["vol"])}<br>'
                 f'{"Naya Call writing ➜ resistance mazboot" if p["fresh"] else "Call unwinding ➜ resistance kamzor"}</div>',
                 unsafe_allow_html=True,
@@ -1238,8 +1267,9 @@ def render_page():
             z2.markdown(
                 f'<div style="background:#f0fdf4;color:#111;border-left:6px solid #22c55e;padding:12px;border-radius:8px">'
                 f'<b>🟢 DEMAND ZONE (Support)</b><br>'
-                f'<span style="font-size:24px;font-weight:800">{demand["low"]} – {demand["high"]}</span><br>'
+                f'<span style="font-size:24px;font-weight:800">{fs(demand["low"])} – {fs(demand["high"])}</span><br>'
                 f'Main level S1: <b>{p["strike"]}</b> • {strength_label(p["score"])}<br>'
+                f'📏 Zone size: <b>{zone_size_txt(demand)}</b> • Spot se: <b>{zone_dist_txt(demand, "demand")}</b><br>'
                 f'Put OI: {p["oi"] / 1e5:.1f}L • Chg: {p["chg"] / 1e5:+.1f}L • Vol: {fmt_vol(p["vol"])}<br>'
                 f'{"Naya Put writing ➜ support mazboot" if p["fresh"] else "Put unwinding ➜ support kamzor"}</div>',
                 unsafe_allow_html=True,
@@ -1258,8 +1288,9 @@ def render_page():
                     p2 = z["primary"]
                     colx.markdown(
                         f'<div style="background:{bg};color:#111;border-left:6px solid {bd};padding:10px;border-radius:8px;margin-top:6px">'
-                        f'<b>{ttl}</b><br><span style="font-size:20px;font-weight:800">{z["low"]} – {z["high"]}</span><br>'
+                        f'<b>{ttl}</b><br><span style="font-size:20px;font-weight:800">{fs(z["low"])} – {fs(z["high"])}</span><br>'
                         f'Main level: <b>{p2["strike"]}</b> • {strength_label(p2["score"])}<br>'
+                        f'📏 Size: <b>{zone_size_txt(z)}</b> • Spot se: <b>{zone_dist_txt(z, "supply" if nm == "Call" else "demand")}</b><br>'
                         f'{nm} OI: {p2["oi"] / 1e5:.1f}L • Chg: {p2["chg"] / 1e5:+.1f}L</div>',
                         unsafe_allow_html=True,
                     )
@@ -1312,7 +1343,8 @@ def render_page():
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
         st.caption(
-            "Peela = ITM | Neela strike = ATM | Laal strike = Supply zone | Hara strike = Demand zone | "
+            "Peela = ITM | Gehra violet = sabse zyada OI/Volume (100%) | Halka violet = 75% se upar | "
+        "Supply/Demand Zone 'Zone' column mein | "
             "Orange line = spot (market yahan chal raha hai)"
         )
         render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
