@@ -132,7 +132,9 @@ expiry_date = st.sidebar.selectbox("Select Expiry Date", expiry_options)
 n_strikes = st.sidebar.slider("ATM ke upar/niche strikes", 5, 30, 10)
 show_summary = st.sidebar.checkbox("Strike ke baad PCR / Zone dikhao", value=True)
 zone_pts = st.sidebar.number_input("Zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
-                                   help="0 = auto: spot ka 0.08% (Nifty par lagbhag 20 points, BankNifty ~40, Sensex ~65). Apni marzi ke points bhi likh sakte hain.")
+                                   help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points, BankNifty ~83, Sensex ~130). Apni marzi ke points bhi likh sakte hain. Sab zone isi chaudai ke hote hain.")
+show_vol_zones = st.sidebar.checkbox("📊 Volume zones chart par dikhao", value=True)
+show_oi_zones = st.sidebar.checkbox("📈 OI zones chart par dikhao", value=True)
 focus_mode = st.sidebar.checkbox("📺 Focus mode (sirf option chain)", value=False)
 chart_focus = st.sidebar.checkbox("📈 Charts Focus mode (sirf charts)", value=False)
 auto_refresh = st.sidebar.checkbox("🔄 Auto refresh (smooth, screen wahin rahegi)", value=False)
@@ -211,54 +213,50 @@ def analyze(df, spot, zone_pts=0.0):
     diffs = diffs[diffs > 0]
     step = float(diffs.min()) if len(diffs) else 50.0          # strike gap (Nifty 50, BankNifty 100, stock 2.5...)
 
-    # Zone ki chaudai (points): user ne di ho to wahi, warna auto = spot ka 0.08% (Nifty par ~20 points)
-    w = float(zone_pts) if zone_pts and zone_pts > 0 else float(spot) * 0.0008
+    # Zone ki chaudai (points): user ne di ho to wahi, warna auto = spot ka 0.16% (Nifty par ~40 points)
+    w = float(zone_pts) if zone_pts and zone_pts > 0 else float(spot) * 0.0016
     w = round(w) if w >= 1 else round(w, 2)
     w = max(w, 0.01)
     half = w / 2
+    colmax = {c: max(float(d[c].max()), 1.0) for c in ("Call OI", "Put OI", "Call Vol", "Put Vol")}
 
-    # Score = 50% OI + 30% Volume + 20% fresh OI addition (0-100)
-    for side in ("Call", "Put"):
-        oi, vol = d[f"{side} OI"], d[f"{side} Vol"]
-        chg = d[f"{side} OI Chg"].clip(lower=0)
-        d[f"{side} Score"] = (
-            0.5 * oi / max(oi.max(), 1) + 0.3 * vol / max(vol.max(), 1) + 0.2 * chg / max(chg.max(), 1)
-        ) * 100
-
-    def zone(side, mask, avoid=None):
-        cand = d[mask].sort_values(f"{side} Score", ascending=False)
-        if avoid:                                   # Zone 2: pehle zone se 100+ pts door
-            cand = cand[(cand["Strike"] < avoid["low"] - 2 * step) | (cand["Strike"] > avoid["high"] + 2 * step)]
-        if cand.empty:
-            return None
-        top = cand.iloc[0]
-        if avoid and float(top[f"{side} Score"]) < 20:   # bahut kamzor ho to zone 2 nahi
-            return None
-        chg = float(top[f"{side} OI Chg"])
-        k = float(top["Strike"])
-        levels = [{
-            "strike": fs(k),
-            "score": float(top[f"{side} Score"]),
-            "oi": float(top[f"{side} OI"]),
-            "vol": float(top[f"{side} Vol"]),
-            "chg": chg,
-            "fresh": chg > 0,
-        }]
-        z = {                                       # zone = sabse mazboot strike ke aas-paas w points ki patti
-            "primary": levels[0],
-            "low": round(k - half, 2),
-            "high": round(k + half, 2),
-            "levels": levels,
-            "score": levels[0]["score"],
-            "width": w,
+    def make_zone(basis, side, rank, row):
+        c = "Call" if side == "supply" else "Put"
+        base = "Vol" if basis == "vol" else "OI"
+        k = float(row["Strike"])
+        pct = float(row[f"{c} {base}"]) / colmax[f"{c} {base}"] * 100      # poori chain ke sabse zyada ka kitna %
+        chg = float(row[f"{c} OI Chg"])
+        z = {
+            "basis": basis, "side": side, "rank": rank, "strike": fs(k), "pct": pct,
+            "primary": {"strike": fs(k), "score": pct, "oi": float(row[f"{c} OI"]),
+                        "vol": float(row[f"{c} Vol"]), "chg": chg, "fresh": chg > 0},
+            "low": round(k - half, 2), "high": round(k + half, 2), "width": w,     # strike ke aas-paas w points ki patti
         }
-        z["dist"] = (z["low"] - spot) if side == "Call" else (spot - z["high"])   # spot se kitne points door
+        z["dist"] = (z["low"] - spot) if side == "supply" else (spot - z["high"])  # spot se kitne points door
         return z
 
-    supply = zone("Call", d["Strike"] >= spot)   # Resistance (Call writers)
-    demand = zone("Put", d["Strike"] <= spot)    # Support (Put writers)
-    supply2 = zone("Call", d["Strike"] >= spot, supply) if supply else None
-    demand2 = zone("Put", d["Strike"] <= spot, demand) if demand else None
+    zone_sets = {"vol": {"supply": [], "demand": []}, "oi": {"supply": [], "demand": []}}
+    for basis in ("vol", "oi"):
+        for side in ("supply", "demand"):
+            col = ("Call " if side == "supply" else "Put ") + ("Vol" if basis == "vol" else "OI")
+            pool = d[d["Strike"] >= spot] if side == "supply" else d[d["Strike"] <= spot]
+            pool = pool[pool[col] > 0]
+            if pool.empty:
+                continue
+            i1 = pool[col].idxmax()                                  # Zone 1: us taraf ka sabse zyada
+            out = [make_zone(basis, side, 1, d.loc[i1])]
+            k1, lim = float(d.loc[i1, "Strike"]), 10 * step
+            if side == "supply":                                     # Zone 2: bahar ki taraf (upar), 10 strikes tak
+                cand = pool[(pool["Strike"] > k1) & (pool["Strike"] <= k1 + lim)]
+            else:                                                    # Demand: bahar ki taraf (niche)
+                cand = pool[(pool["Strike"] < k1) & (pool["Strike"] >= k1 - lim)]
+            cand = cand[cand[col] >= 0.6 * colmax[col]]              # 60% ya usse upar
+            if not cand.empty:
+                out.append(make_zone(basis, side, 2, d.loc[cand[col].idxmax()]))
+            zone_sets[basis][side] = out
+    zones_flat = [z for b_ in ("oi", "vol") for sd in ("supply", "demand") for z in zone_sets[b_][sd]]
+    supply = (zone_sets["oi"]["supply"] or zone_sets["vol"]["supply"] or [None])[0]    # bias ke liye (OI zone 1)
+    demand = (zone_sets["oi"]["demand"] or zone_sets["vol"]["demand"] or [None])[0]
 
     # Liquidity strikes: jahan Call+Put dono ka OI aur Volume sabse zyada
     tot_oi, tot_vol = d["Call OI"] + d["Put OI"], d["Call Vol"] + d["Put Vol"]
@@ -326,7 +324,8 @@ def analyze(df, spot, zone_pts=0.0):
         bias = "SIDEWAYS / RANGE-BOUND 🟡"
 
     return {
-        "supply": supply, "demand": demand, "supply2": supply2, "demand2": demand2, "liq": liq, "step": step,
+        "supply": supply, "demand": demand, "zones": zones_flat, "zone_sets": zone_sets, "zone_width": w,
+        "liq": liq, "step": step,
         "max_pain": max_pain, "pcr": pcr,
         "chg_c": chg_c, "chg_p": chg_p, "points": pts, "bias": bias, "reasons": reasons,
     }
@@ -362,7 +361,7 @@ def fmt_vol(v):
     return f"{int(v)}"
 
 
-HI_COLOR, MID_COLOR = "#7c3aed", "#c4b5fd"      # sabse zyada (100%) / 75% se upar
+HI_COLOR, MID_COLOR, CYAN_COLOR = "#7c3aed", "#c4b5fd", "#a5f3fc"      # 100% / 75% se upar / 60% se upar
 
 
 def bar_cell(text, pct, bg, color, direction, top_cls):
@@ -375,6 +374,11 @@ def bar_cell(text, pct, bg, color, direction, top_cls):
         return (
             f'<td style="background-color:{MID_COLOR}">'
             f'<div class="v">{text}</div><div class="pb mid">{pct:.0f}%</div></td>'
+        )
+    if pct >= 59.5:                                  # 60% se upar (Zone 2 ke layak)
+        return (
+            f'<td style="background-color:{CYAN_COLOR}">'
+            f'<div class="v">{text}</div><div class="pb cy">{pct:.0f}%</div></td>'
         )
     cls = "pb"
     grad = f"linear-gradient({direction}, {color} {pct:.0f}%, transparent {pct:.0f}%)"
@@ -402,20 +406,14 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
     view = d.iloc[max(atm_idx - n, 0): atm_idx + n + 1]
 
     # zone tags per strike
-    tags, zone_bg = {}, {}
+    tags = {}
     if ana:
-        for key, name, bg, pre in (
-            ("supply", "SUPPLY", "#fecaca", "R"), ("demand", "DEMAND", "#bbf7d0", "S"),
-            ("supply2", "SUPPLY 2", "#fee2e2", "R2."), ("demand2", "DEMAND 2", "#dcfce7", "S2."),
-        ):
-            z = ana.get(key)
-            if not z:
-                continue
-            for i, lv in enumerate(z["levels"]):
-                label = pre + str(i + 1)
-                cls = "r" if key.startswith("supply") else "s"
-                tags.setdefault(lv["strike"], []).append(f'<span class="chip {cls}">{label} {name}</span>')
-                zone_bg.setdefault(lv["strike"], bg)
+        for g in zone_groups(ana):
+            short, both, drop = group_tag(g)
+            has_oi = any(m["basis"] == "oi" for m in g["members"])
+            cls = ("r" if has_oi else "rv") if g["side"] == "supply" else ("s" if has_oi else "sv")
+            tags.setdefault(fs(g["level"]), []).append(
+                f'<span class="chip {cls}">{"⭐ " if both else ""}{"💧 " if drop else ""}{short}</span>')
         for lq in ana.get("liq") or []:
             tags.setdefault(lq["strike"], []).append('<span class="chip l">💧 LIQUIDITY</span>')
         tags.setdefault(ana["max_pain"], []).append('<span class="chip m">🎯 MAX PAIN</span>')
@@ -507,11 +505,12 @@ TABLE_CSS = """
       .pb.top-green{color:#166534;border-color:#22c55e;background:#dcfce7;font-weight:700;}
       .pb.hi{color:#6d28d9;border-color:#c4b5fd;background:#fff;font-weight:800;}
       .pb.mid{color:#5b21b6;border-color:#a78bfa;background:#ede9fe;font-weight:700;}
+      .pb.cy{color:#155e75;border-color:#22d3ee;background:#ecfeff;font-weight:700;}
       tr.atm td{border-top:2px solid #3b82f6;border-bottom:2px solid #3b82f6;}
       tr.spotrow td{background:linear-gradient(90deg,#f97316,#ef4444,#f97316);color:#fff;font-weight:800;
                     padding:4px;font-size:12px;letter-spacing:1px;border:none;}
       .chip{display:inline-block;font-size:10px;font-weight:700;border-radius:10px;padding:1px 7px;margin:1px;}
-      .chip.r{background:#ef4444;color:#fff;} .chip.s{background:#22c55e;color:#fff;} .chip.m{background:#8b5cf6;color:#fff;} .chip.l{background:#0891b2;color:#fff;}
+      .chip.r{background:#ef4444;color:#fff;} .chip.s{background:#22c55e;color:#fff;} .chip.m{background:#8b5cf6;color:#fff;} .chip.l{background:#0891b2;color:#fff;} .chip.rv{background:#9f1239;color:#fff;} .chip.sv{background:#4d7c0f;color:#fff;}
     </style>"""
 
 TABLE_UPDATE_JS = """
@@ -574,26 +573,47 @@ def _pfmt(v):
     return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:,.2f}"
 
 
-def zone_items(ana):
-    items = []
-    for key, name, short, col, alpha in (
-        ("supply", "SUPPLY 1", "SUP1", "#ef4444", 0.17), ("supply2", "SUPPLY 2", "SUP2", "#f87171", 0.09),
-        ("demand", "DEMAND 1", "DEM1", "#16a34a", 0.17), ("demand2", "DEMAND 2", "DEM2", "#4ade80", 0.10),
-    ):
-        z = (ana or {}).get(key)
-        if not z:
+def zone_groups(ana, show_vol=True, show_oi=True):
+    """Volume zone aur OI zone agar ek hi jagah (overlap) hon to ek group mein (⭐ dono mile)."""
+    groups = []
+    for z in (ana or {}).get("zones", []):
+        if (z["basis"] == "vol" and not show_vol) or (z["basis"] == "oi" and not show_oi):
             continue
-        label = f"{name} {fs(z['low'])}-{fs(z['high'])} ({_strength_txt(z['score'])}, {fs(z['width'])}p)"
-        items.append({"label": label, "short": short, "lo": float(z["low"]), "hi": float(z["high"]), "color": col,
-                      "alpha": alpha, "level": z["primary"]["strike"], "key": key, "single": True})
+        for g in groups:
+            if g["side"] == z["side"] and abs(g["level"] - float(z["strike"])) < z["width"]:
+                g["members"].append(z)
+                break
+        else:
+            groups.append({"side": z["side"], "level": float(z["strike"]), "low": z["low"], "high": z["high"],
+                           "width": z["width"], "members": [z]})
+    return groups
+
+
+def group_tag(g):
+    parts = [("V" if m["basis"] == "vol" else "O") + str(m["rank"])
+             for m in sorted(g["members"], key=lambda m: (m["basis"] != "vol", m["rank"]))]
+    short = ("SUP " if g["side"] == "supply" else "DEM ") + "+".join(parts)
+    both = len({m["basis"] for m in g["members"]}) > 1
+    drop = any(m["rank"] == 2 for m in g["members"])
+    return short, both, drop
+
+
+def zone_items(ana, show_vol=True, show_oi=True):
+    items = []
+    for g in zone_groups(ana, show_vol, show_oi):
+        short, both, drop = group_tag(g)
+        has_oi = any(m["basis"] == "oi" for m in g["members"])
+        sup = g["side"] == "supply"
+        color = ("#ef4444" if has_oi else "#9f1239") if sup else ("#16a34a" if has_oi else "#4d7c0f")
+        alpha = 0.26 if both else 0.18 if any(m["rank"] == 1 for m in g["members"]) else 0.10
+        label = f"{'⭐ ' if both else ''}{'💧 ' if drop else ''}{short} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p)"
+        items.append({"label": label, "short": short, "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
+                      "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True})
     return items
 
 
 def level_lines(ana, spot):
     out = [(f"SPOT {_pfmt(spot)}", float(spot), "#f97316")]
-    for it in zone_items(ana):
-        if it["key"] in ("supply", "demand"):
-            out.append((("R1 " if it["key"] == "supply" else "S1 ") + str(it["level"]), float(it["level"]), it["color"]))
     if ana:
         out.append((f"MP {ana['max_pain']}", float(ana["max_pain"]), "#8b5cf6"))
         taken = {round(v) for _, v, _ in out}
@@ -760,6 +780,10 @@ function drawPrice(){
     if (y < T) { y = T + 9; arrow = '\u25B2 '; } else if (y > T + ph) { y = T + ph - 9; arrow = '\u25BC '; }
     return {l: l, y: y, t: arrow + l.lab};
   });
+  D.zones.forEach(function(z){                       // screen se bahar ke zone ka tag (▲ / ▼)
+    var yc = Y((z.lo + z.hi) / 2);
+    if (yc < T || yc > T + ph) tg.push({l: {color: z.color}, y: yc < T ? T + 9 : T + ph - 9, t: (yc < T ? '\u25B2 ' : '\u25BC ') + z.short});
+  });
   var ys = spread(tg.map(function(o){ return o.y; }), 15);
   tg.forEach(function(o, k){
     out.push('<rect x="' + (L + pw + 2) + '" y="' + f1(ys[k] - 8) + '" width="' + (CFG.R - 4) + '" height="15" rx="4" fill="' + o.l.color + '"/>' +
@@ -788,13 +812,13 @@ function drawOI(){
     t += step;
   }
   var zt = [];
-  D.zones.forEach(function(z){
+  D.zones.forEach(function(z, zi){
     var x1 = Math.max(L, XS(z.a) - slot / 2), x2 = Math.min(L + pw, XS(z.b) + slot / 2);
     if (x2 <= x1) return;
     cl.push('<rect x="' + f1(x1) + '" y="' + T + '" width="' + f1(x2 - x1) + '" height="' + ph + '" fill="' + z.color + '" opacity="' + z.alpha + '"/>' +
             '<rect x="' + f1(x1) + '" y="' + T + '" width="' + f1(x2 - x1) + '" height="' + ph + '" fill="none" stroke="' + z.color + '" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>');
     var dem = z.key.indexOf('demand') === 0;
-    zt.push('<text x="' + f1(dem ? x2 : x1) + '" y="' + (T - 8) + '" font-size="10" font-weight="700" fill="' + z.color + '" text-anchor="' + (dem ? 'end' : 'start') + '">' + z.short + '</text>');
+    zt.push('<text x="' + f1(dem ? x2 : x1) + '" y="' + (T - 8 - (zi % 2) * 12) + '" font-size="10" font-weight="700" fill="' + z.color + '" text-anchor="' + (dem ? 'end' : 'start') + '">' + z.short + '</text>');
   });
   var i0 = Math.max(0, Math.floor(a) - 1), i1 = Math.min(n - 1, Math.ceil(b) + 1), bw = Math.min(Math.max(2, slot * 0.38), 30);
   for (var i = i0; i <= i1; i++) {
@@ -808,7 +832,7 @@ function drawOI(){
   D.lines.forEach(function(l){
     var x = XS(l.val);
     if (x < L || x > L + pw) return;
-    cl.push('<line x1="' + f1(x) + '" x2="' + f1(x) + '" y1="' + (T - 36) + '" y2="' + (T + ph) + '" stroke="' + l.color + '" stroke-width="1.6" stroke-dasharray="' + l.dash + '"/>');
+    cl.push('<line x1="' + f1(x) + '" x2="' + f1(x) + '" y1="' + (T - 52) + '" y2="' + (T + ph) + '" stroke="' + l.color + '" stroke-width="1.6" stroke-dasharray="' + l.dash + '"/>');
     tags.push([x, l]);
   });
   out.push('<g clip-path="url(#cp)">' + cl.join('') + '</g>', zt.join(''));
@@ -823,7 +847,7 @@ function drawOI(){
   }
   tags.sort(function(p, q){ return p[0] - q[0]; });
   tags.forEach(function(q, k){
-    var x = q[0], l = q[1], ty = T - 40 + (k % 2) * 16, w = 6.2 * l.lab.length + 8, bx = Math.min(Math.max(x - w / 2, L), L + pw - w);
+    var x = q[0], l = q[1], ty = T - 56 + (k % 2) * 16, w = 6.2 * l.lab.length + 8, bx = Math.min(Math.max(x - w / 2, L), L + pw - w);
     out.push('<rect x="' + f1(bx) + '" y="' + f1(ty - 11) + '" width="' + f1(w) + '" height="15" rx="4" fill="' + l.color + '"/>' +
              '<text x="' + f1(bx + w / 2) + '" y="' + f1(ty) + '" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">' + l.lab + '</text>');
   });
@@ -917,7 +941,7 @@ window.__update = function(p){
 
 _CHART_CFG = {
     "price": {"kind": "price", "W": 440, "H": 330, "L": 6, "R": 74, "T": 10, "B": 26, "panY": True, "anchorBottom": False},
-    "oi": {"kind": "oi", "W": 440, "H": 340, "L": 32, "R": 6, "T": 56, "B": 34, "panY": False, "anchorBottom": True},
+    "oi": {"kind": "oi", "W": 440, "H": 354, "L": 32, "R": 6, "T": 70, "B": 34, "panY": False, "anchorBottom": True},
 }
 
 
@@ -974,8 +998,8 @@ def zoom_shell_html(kind):
     return html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
 
 
-def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False):
-    items, lines = zone_items(ana), level_lines(ana, spot)
+def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True):
+    items, lines = zone_items(ana, show_vol, show_oi), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
     flo, fhi = float(min(vals)), float(max(vals))
     fpad = (fhi - flo) * 0.04 or 5
@@ -992,13 +1016,13 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False):
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
         "labels": [f"{r.time:{xfmt}}" for r in rows],
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
-        "zones": [{"label": i["label"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
+        "zones": [{"label": i["label"], "short": i["short"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
         "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
     }
 
 
-def oi_chart_data(df, spot, n, ana, sig=""):
+def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True):
     d = df.sort_values("Strike").reset_index(drop=True)
     ai = int((d["Strike"] - spot).abs().idxmin())
     v = d.iloc[max(ai - n, 0): ai + n + 1].reset_index(drop=True)
@@ -1007,15 +1031,12 @@ def oi_chart_data(df, spot, n, ana, sig=""):
     atm = float(d.loc[ai, "Strike"])
     ymax = max(float(v["Call OI"].max()), float(v["Put OI"].max()), 1.0) * 1.1
     zones = [
-        {"key": it["key"], "short": it["short"], "a": it["level"] if it["single"] else it["lo"],
-         "b": it["level"] if it["single"] else it["hi"], "color": it["color"], "alpha": it["alpha"]}
-        for it in zone_items(ana)
+        {"key": it["key"], "short": it["short"], "a": it["level"], "b": it["level"], "color": it["color"], "alpha": it["alpha"]}
+        for it in zone_items(ana, show_vol, show_oi)
     ]
-    r1 = float(ana["supply"]["primary"]["strike"]) if ana and ana["supply"] else -1
-    s1 = float(ana["demand"]["primary"]["strike"]) if ana and ana["demand"] else -1
     lines = [
         {"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"}
-        for lab, val, col in level_lines(ana, spot) if val != r1 and val != s1
+        for lab, val, col in level_lines(ana, spot)
     ]
     return {
         "sig": "oi|" + sig, "n": len(strikes),
@@ -1197,7 +1218,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             )
             fake = pd.DataFrame({"time": [pd.Timestamp("2000-01-01")], "open": [spot], "high": [spot],
                                  "low": [spot], "close": [spot], "volume": [0]})
-            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", fit_all=True)
+            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", True, show_vol_zones, show_oi_zones)
         else:
             if src == "intraday":
                 candles, xfmt = resample_candles(candles, tf), "%H:%M"
@@ -1205,12 +1226,12 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             else:
                 xfmt = "%d %b %H:%M"
                 st.caption("Aaj intraday data nahi, isliye pichle 7 din ke 30-min candles. Laal = Supply, Hara = Demand.")
-            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}")
+            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}", False, show_vol_zones, show_oi_zones)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
     else:
         components.html(zoom_shell_html("oi"), height=height, scrolling=True)
-        components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name)}), height=0)
+        components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
         st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
@@ -1247,89 +1268,46 @@ def render_page():
         )
         st.write("")
 
-        z1, z2 = st.columns(2)
-        if supply:
-            p = supply["primary"]
-            z1.markdown(
-                f'<div style="background:#fef2f2;color:#111;border-left:6px solid #ef4444;padding:12px;border-radius:8px">'
-                f'<b>🔴 SUPPLY ZONE (Resistance)</b><br>'
-                f'<span style="font-size:24px;font-weight:800">{fs(supply["low"])} – {fs(supply["high"])}</span><br>'
-                f'Main level R1: <b>{p["strike"]}</b> • {strength_label(p["score"])}<br>'
-                f'📏 Zone size: <b>{zone_size_txt(supply)}</b> • Spot se: <b>{zone_dist_txt(supply, "supply")}</b><br>'
-                f'Call OI: {p["oi"] / 1e5:.1f}L • Chg: {p["chg"] / 1e5:+.1f}L • Vol: {fmt_vol(p["vol"])}<br>'
-                f'{"Naya Call writing ➜ resistance mazboot" if p["fresh"] else "Call unwinding ➜ resistance kamzor"}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            z1.info("Spot ke upar supply zone nahi mila.")
-        if demand:
-            p = demand["primary"]
-            z2.markdown(
-                f'<div style="background:#f0fdf4;color:#111;border-left:6px solid #22c55e;padding:12px;border-radius:8px">'
-                f'<b>🟢 DEMAND ZONE (Support)</b><br>'
-                f'<span style="font-size:24px;font-weight:800">{fs(demand["low"])} – {fs(demand["high"])}</span><br>'
-                f'Main level S1: <b>{p["strike"]}</b> • {strength_label(p["score"])}<br>'
-                f'📏 Zone size: <b>{zone_size_txt(demand)}</b> • Spot se: <b>{zone_dist_txt(demand, "demand")}</b><br>'
-                f'Put OI: {p["oi"] / 1e5:.1f}L • Chg: {p["chg"] / 1e5:+.1f}L • Vol: {fmt_vol(p["vol"])}<br>'
-                f'{"Naya Put writing ➜ support mazboot" if p["fresh"] else "Put unwinding ➜ support kamzor"}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            z2.info("Spot ke niche demand zone nahi mila.")
+        def zone_card(title, zs, side, bg, border):
+            html = (f'<div style="background:{bg};color:#111;border-left:6px solid {border};padding:10px;'
+                    f'border-radius:8px;margin-bottom:6px"><b>{title}</b><br>')
+            if not zs:
+                return html + 'Zone nahi mila</div>'
+            for z in zs:
+                p = z["primary"]
+                other = ana["zone_sets"]["oi" if z["basis"] == "vol" else "vol"][side]
+                both = any(abs(float(o["strike"]) - float(z["strike"])) < z["width"] for o in other)
+                html += (
+                    f'{"💧 " if z["rank"] == 2 else ""}<b>Zone {z["rank"]}:</b> '
+                    f'<span style="font-size:18px;font-weight:800">{fs(z["low"])} – {fs(z["high"])}</span> '
+                    f'(strike {p["strike"]}, {z["pct"]:.0f}%)<br>'
+                    f'📏 {zone_size_txt(z)} • Spot se {zone_dist_txt(z, side)}<br>'
+                    f'OI {p["oi"] / 1e5:.1f}L • Chg {p["chg"] / 1e5:+.1f}L • Vol {fmt_vol(p["vol"])}<br>'
+                    + ('⭐ OI aur Volume dono ka zone yahin<br>' if both else '')
+                )
+            return html + '</div>'
 
-        sup2, dem2 = ana["supply2"], ana["demand2"]
-        if sup2 or dem2:
-            y1c, y2c = st.columns(2)
-            for colx, z, ttl, bg, bd, nm in (
-                (y1c, sup2, "🔴 SUPPLY ZONE 2", "#fef2f2", "#f87171", "Call"),
-                (y2c, dem2, "🟢 DEMAND ZONE 2", "#f0fdf4", "#4ade80", "Put"),
-            ):
-                if z:
-                    p2 = z["primary"]
-                    colx.markdown(
-                        f'<div style="background:{bg};color:#111;border-left:6px solid {bd};padding:10px;border-radius:8px;margin-top:6px">'
-                        f'<b>{ttl}</b><br><span style="font-size:20px;font-weight:800">{fs(z["low"])} – {fs(z["high"])}</span><br>'
-                        f'Main level: <b>{p2["strike"]}</b> • {strength_label(p2["score"])}<br>'
-                        f'📏 Size: <b>{zone_size_txt(z)}</b> • Spot se: <b>{zone_dist_txt(z, "supply" if nm == "Call" else "demand")}</b><br>'
-                        f'{nm} OI: {p2["oi"] / 1e5:.1f}L • Chg: {p2["chg"] / 1e5:+.1f}L</div>',
-                        unsafe_allow_html=True,
-                    )
+        zs_ = ana["zone_sets"]
+        st.markdown("**📊 Volume ke hisaab se zone**")
+        va, vb = st.columns(2)
+        va.markdown(zone_card("🔴 SUPPLY (Call Volume)", zs_["vol"]["supply"], "supply", "#fff1f2", "#9f1239"), unsafe_allow_html=True)
+        vb.markdown(zone_card("🟢 DEMAND (Put Volume)", zs_["vol"]["demand"], "demand", "#f7fee7", "#4d7c0f"), unsafe_allow_html=True)
+        st.markdown("**📈 OI ke hisaab se zone**")
+        oa, ob = st.columns(2)
+        oa.markdown(zone_card("🔴 SUPPLY (Call OI)", zs_["oi"]["supply"], "supply", "#fef2f2", "#ef4444"), unsafe_allow_html=True)
+        ob.markdown(zone_card("🟢 DEMAND (Put OI)", zs_["oi"]["demand"], "demand", "#f0fdf4", "#16a34a"), unsafe_allow_html=True)
         if ana["liq"]:
             st.markdown(
                 "💧 **Liquidity strikes** (sabse zyada OI + Volume, jahan price aksar atakta/kheenchta hai): "
                 + " | ".join(f"**{q['strike']}** (OI {q['oi'] / 1e5:.0f}L, Vol {fmt_vol(q['vol'])})" for q in ana["liq"])
             )
 
-        with st.expander("📌 Bias ke karan (reasons)", expanded=True):
-            for rs in ana["reasons"]:
-                st.write("• " + rs)
-            if supply and demand:
-                st.write(
-                    f"• **Trade view:** {demand['primary']['strike']} ke upar tak support, "
-                    f"{supply['primary']['strike']} ke niche tak resistance. "
-                    f"{supply['primary']['strike']} ke upar mazboot close = breakout, "
-                    f"{demand['primary']['strike']} ke niche close = breakdown."
-                )
-
-        lv_rows = []
-        for name, z, pre in (("Supply 1", supply, "R"), ("Demand 1", demand, "S"),
-                             ("Supply 2", ana["supply2"], "R2."), ("Demand 2", ana["demand2"], "S2.")):
-            if z:
-                for i, lv in enumerate(z["levels"]):
-                    lv_rows.append({
-                        "Level": f"{pre}{i + 1}", "Type": name, "Strike": lv["strike"],
-                        "Score": round(lv["score"], 1), "OI (L)": round(lv["oi"] / 1e5, 1),
-                        "OI Chg (L)": round(lv["chg"] / 1e5, 1), "Volume": int(lv["vol"]),
-                        "Status": "Fresh writing" if lv["fresh"] else "Unwinding",
-                    })
-        if lv_rows:
-            st.dataframe(pd.DataFrame(lv_rows), use_container_width=True, hide_index=True)
-
         if st.button("🤖 AI se detailed analysis (Gemini free / Claude)"):
             summary = {
                 "instrument": inst_name, "spot": spot, "expiry": expiry_date, "bias": ana["bias"], "pcr": round(ana["pcr"], 2),
-                "max_pain": ana["max_pain"], "supply_zone": supply, "demand_zone": demand,
-                "supply_zone_2": ana["supply2"], "demand_zone_2": ana["demand2"], "liquidity_strikes": ana["liq"],
+                "max_pain": ana["max_pain"], "zone_width_points": ana["zone_width"],
+                "volume_zones": ana["zone_sets"]["vol"], "oi_zones": ana["zone_sets"]["oi"],
+                "liquidity_strikes": ana["liq"], "bias_reasons": ana["reasons"],
                 "net_call_oi_change": ana["chg_c"], "net_put_oi_change": ana["chg_p"],
             }
             with st.spinner("AI analysis ho rahi hai..."):
@@ -1343,7 +1321,7 @@ def render_page():
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
         st.caption(
-            "Peela = ITM | Gehra violet = sabse zyada OI/Volume (100%) | Halka violet = 75% se upar | "
+            "Peela = ITM | Gehra violet = sabse zyada OI/Volume (100%) | Halka violet = 75% se upar | Aasmani = 60% se upar (Zone 2 ke layak) | "
         "Supply/Demand Zone 'Zone' column mein | "
             "Orange line = spot (market yahan chal raha hai)"
         )
