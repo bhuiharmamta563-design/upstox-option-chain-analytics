@@ -1,5 +1,5 @@
 """
-Vajra Analytics - Option Chain: Indices + Stocks (single file: app.py)
+Veer Zone Pro: Indices + Stocks (single file: app.py)
 
 Install : pip install streamlit pandas numpy requests python-dotenv
 Run     : streamlit run app.py
@@ -27,7 +27,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
-st.set_page_config(page_title="Vajra Analytics - Option Chain", layout="wide")
+st.set_page_config(page_title="Veer Zone Pro", layout="wide")
 
 load_dotenv()
 try:
@@ -90,6 +90,11 @@ def resolve_stock(symbol):
     return None
 
 
+PAGE_DARK = "<style>.stApp{background:#0e1117;color:#e5e7eb}[data-testid=stSidebar]{background:#161b22}</style>"
+PAGE_LIGHT = "<style>.stApp{background:#ffffff;color:#111111}[data-testid=stSidebar]{background:#f3f4f6}</style>"
+theme_pick = st.sidebar.radio("Theme", ["🌙 Dark", "☀️ Light"], horizontal=True, index=0)
+st.session_state["theme_dark"] = theme_pick.startswith("🌙")
+st.markdown(PAGE_DARK if st.session_state["theme_dark"] else PAGE_LIGHT, unsafe_allow_html=True)
 st.sidebar.header("Instrument")
 kind = st.sidebar.radio("Type", ["Index", "Stock"], horizontal=True)
 if kind == "Index":
@@ -107,7 +112,8 @@ else:
         st.stop()
     inst_name = sym
 
-st.title(f"📊 Live {inst_name} Option Chain & Volume Analytics")
+st.title(f"📊 Veer Zone Pro · {inst_name}")
+st.caption("Live Option Chain & Zone Analytics")
 
 
 # ---------------- Expiry dates (auto) ----------------
@@ -562,6 +568,40 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
 
 
 # ---------------- Charts with Supply / Demand zones (pure SVG, no extra library) ----------------
+def _dark():
+    return bool(st.session_state.get("theme_dark", True))
+
+
+def _wc():
+    return "dk" if _dark() else ""
+
+
+DARK_CSS = """<style>
+.dk{--fg:#e5e7eb;}
+body:has(.dk){background:#0e1117;}
+#oc.dk{background:#0e1117;}
+.dk td[style*="background-color:#c4b5fd"]{background-color:#4c1d95 !important;color:#ede9fe !important;}
+.dk td[style*="background-color:#c4b5fd"] .v{color:#ede9fe;}
+.dk td{color:#e5e7eb;border-color:#30363d;}
+.dk td[style*="background-color:#ffffff"]{background-color:#161b22 !important;}
+.dk td[style*="background-color:#fff7cc"]{background-color:#3d3a1c !important;}
+.dk td[style*="background-color:#e5e7eb"]{background-color:#2d333b !important;}
+.dk td[style*="background-color:#faf5ff"]{background-color:#1f1a2e !important;}
+.dk td[style*="background-color:#a5f3fc"]{background-color:#164e63 !important;}
+.dk th{background:#161b22;color:#c9d1d9;border-color:#30363d;}
+.dk th.calls{background:#3b1d1d;color:#fca5a5;}
+.dk th.puts{background:#14291f;color:#86efac;}
+.dk th.sum{background:#2a1f3d;color:#d8b4fe;}
+.dk .pb{background:#0d1117;color:#86efac;border-color:#2ea043;}
+.dk .pb.cy{background:#0e2a33;color:#67e8f9;border-color:#0891b2;}
+.dk .pb.mid{background:#2e1065;color:#ddd6fe;border-color:#7c3aed;}
+.dk .pb.hi{background:#0d1117;color:#c4b5fd;border-color:#7c3aed;}
+.dk .sh{color:#e5e7eb;}
+.dk #info{color:#c9d1d9;}
+.dk #wait{color:#8b949e;}
+.dk .btns button.g{background:#334155;}
+</style>"""
+
 TABLE_CSS = """
     <meta charset="utf-8"><style>
       body{margin:0;font-family:Arial,Helvetica,sans-serif;}
@@ -612,8 +652,8 @@ window.__update = function(p){
 def table_shell_html():
     """Ye hissa kabhi badalta nahi, isliye refresh par iframe reload nahi hota (Full Screen bana rehta hai)."""
     return (
-        TABLE_CSS
-        + '<div id="oc"><div class="bar"><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
+        DARK_CSS + TABLE_CSS
+        + '<div id="oc" class="' + _wc() + '"><div class="bar"><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
         + '<div class="wrap" id="wrap"><div style="padding:14px;color:#6b7280;font-size:13px;font-family:Arial">Option chain load ho raha hai…</div></div></div>'
         + FS_JS + SCROLL_JS + TABLE_UPDATE_JS
     )
@@ -779,7 +819,7 @@ def _legend():
         ("SPOT", "#f97316"), ("MP = MAX PAIN", "#8b5cf6"), ("LIQ = LIQUIDITY", "#0891b2"),
     )
     return "".join(
-        f'<span style="display:inline-block;margin:0 10px 4px 0;font-size:12px;font-weight:700;color:#111">'
+        f'<span style="display:inline-block;margin:0 10px 4px 0;font-size:12px;font-weight:700;color:var(--fg,#111)">'
         f'<span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:{c};margin-right:5px;vertical-align:-1px"></span>{t}</span>'
         for t, c in chips
     )
@@ -812,6 +852,7 @@ ZOOM_JS = r"""
 var CFG = __CFG__;
 var svg = document.getElementById('svg'), stage = document.getElementById('stage'), info = document.getElementById('info');
 var W = CFG.W, H = CFG.H, L = CFG.L, T = CFG.T, pw = CFG.pw, ph = CFG.ph;
+var GRID = CFG.dark ? '#263241' : '#eef0f3', HALO = CFG.dark ? '#0e1117' : '#fff';
 var D = null, n = 0, sel = -1, touched = false, lastV = null, HINT = info.textContent;
 var DEF = {a: 0, b: 1, lo: 0, hi: 1}, view = {a: 0, b: 1, lo: 0, hi: 1};
 function copyDef(){ return {a: DEF.a, b: DEF.b, lo: DEF.lo, hi: DEF.hi}; }
@@ -876,7 +917,7 @@ function drawPrice(){
   var cl = [], ticks = [], step = niceStep(rng, 6), v = Math.ceil(lo / step) * step, g = 0;
   while (v <= hi && g++ < 80) {
     var y = Y(v);
-    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="#eef0f3"/>');
+    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="' + GRID + '"/>');
     ticks.push('<text x="' + (L + pw + 4) + '" y="' + f1(y + 3) + '" font-size="10" fill="#9ca3af">' + pfmt(v) + '</text>');
     v += step;
   }
@@ -898,7 +939,7 @@ function drawPrice(){
   var zy = zv.map(function(q){ var t = (q[2] - q[1]) >= 20 ? q[1] + 13 : q[1] - 4; return Math.min(Math.max(t, T + 12), T + ph - 4); });
   zy = spread(zy, 13);
   zv.forEach(function(q, k){
-    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + q[0].color + '" stroke="#fff" stroke-width="3" paint-order="stroke">' + q[0].label + '</text>');
+    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + q[0].color + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].label + '</text>');
   });
   D.lines.forEach(function(l){
     var y = Y(l.val);
@@ -937,7 +978,7 @@ function drawOI(){
   var cl = [], step = niceStep(hi / 1e5, 5) * 1e5, t = 0, g = 0;
   while (t <= hi && g++ < 80) {
     var y = Y(t);
-    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="#eef0f3"/>');
+    cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="' + GRID + '"/>');
     out.push('<text x="' + (L - 4) + '" y="' + f1(y + 3) + '" font-size="10" fill="#9ca3af" text-anchor="end">' + Math.round(t / 1e5) + 'L</text>');
     t += step;
   }
@@ -1085,6 +1126,8 @@ def _cfg(kind):
 def zoom_shell_html(kind):
     """Chart ka dhancha: kabhi badalta nahi, isliye refresh par chart reload/chhota nahi hota."""
     cfg = _cfg(kind)
+    cfg["dark"] = _dark()
+    svgbg = "#0e1117" if cfg["dark"] else "#fff"
     W, H, L, T, pw, ph = cfg["W"], cfg["H"], cfg["L"], cfg["T"], cfg["pw"], cfg["ph"]
     ratio = W / H
 
@@ -1112,20 +1155,20 @@ def zoom_shell_html(kind):
     )
     hint = "2 ungli pinch = zoom | khinchein = chart khiskao | Axis par khinchein = price/time zoom | tap = data | double tap = reset"
     html = (
-        f'{css}<div id="oc"><div class="top"><div>{_legend()}</div>'
+        f'{css}<div id="oc" class="{_wc()}"><div class="top"><div>{_legend()}</div>'
         '<div class="btns"><button id="zin" class="g" title="Zoom in">＋</button><button id="zout" class="g" title="Zoom out">－</button>'
         '<button id="zrs" class="g" title="Reset">⟲</button>'
         + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
         + '<button id="zm" class="g">✋ Zoom</button><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
         f'<div id="info">{hint}</div><div id="wait">Chart load ho raha hai…</div>'
         '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
-        f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:#fff;display:block"></svg>'
+        f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:{svgbg};display:block"></svg>'
         f'<div id="zp" class="ov" style="left:{pc(L, W)};top:{pc(T, H)};width:{pc(pw, W)};height:{pc(ph, H)}"></div>'
         f'<div id="za" class="ov" style="left:{pc(ax0, W)};top:{pc(T, H)};width:{pc(ax1 - ax0, W)};height:{pc(ph, H)}"></div>'
         f'<div id="zt" class="ov" style="left:{pc(L, W)};top:{pc(T + ph, H)};width:{pc(pw, W)};height:{pc(H - T - ph, H)}"></div>'
         '</div></div></div></div>'
     )
-    return html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
+    return DARK_CSS + html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
 
 
 def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None):
