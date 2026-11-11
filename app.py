@@ -681,7 +681,51 @@ def group_tag(g):
     return short, both, drop
 
 
-def zone_items(ana, show_vol=True, show_oi=True):
+BREACH_CANDLES = 2   # itni lagatar candles zone ke bahar band hon tabhi "toota"
+
+
+def breach_check(c, ana, need=BREACH_CANDLES):
+    """Har zone ke liye: kya spot zone ke bahar lagataar `need` candle close ho chuka hai?
+    Supply tuta = close zone se UPAR. Demand tuta = close zone se NEECHE.
+    Chart ke candles (time, close) pe chalta hai. Return: list of dicts (sirf toote zone)."""
+    if c is None or len(c) < need or not ana:
+        return []
+    closes = [float(x) for x in c["close"].tolist()]
+    last = closes[-need:]
+    out = []
+    for z in zone_groups(ana):
+        lo, hi = float(z["low"]), float(z["high"])
+        if z["side"] == "supply" and all(x > hi for x in last):
+            out.append({"side": "supply", "low": lo, "high": hi, "close": last[-1], "n": need,
+                        "short": group_tag(z)[0], "dir": "upar"})
+        elif z["side"] == "demand" and all(x < lo for x in last):
+            out.append({"side": "demand", "low": lo, "high": hi, "close": last[-1], "n": need,
+                        "short": group_tag(z)[0], "dir": "neeche"})
+    return out
+
+
+def breach_banner_html(br):
+    """Market Bias patti ke neeche lal/hara alert."""
+    if not br:
+        return ""
+    lines = []
+    for b in br:
+        col = "#fee2e2" if b["side"] == "supply" else "#dcfce7"
+        bd = "#dc2626" if b["side"] == "supply" else "#16a34a"
+        lines.append(
+            f'<div style="background:{col};border-left:6px solid {bd};padding:8px 10px;border-radius:6px;margin:4px 0;color:#111">'
+            f'⚠️ <b>{b["short"]} TOOTA</b>: {b["n"]} candle lagatar {b["low"]:,.0f}-{b["high"]:,.0f} zone ke '
+            f'{b["dir"]} band hui (last close {b["close"]:,.2f}). '
+            f'{"Resistance" if b["side"] == "supply" else "Support"} kamzor, dam dikh raha hai.</div>')
+    return "".join(lines)
+
+
+def option_weak_hint(sh_or_none, side, zone_low, zone_high):
+    """Ye sirf sanket hai: zone ki strike ka OI ghat raha ho (unwinding) to 'kamzor' hint."""
+    return None
+
+
+def zone_items(ana, show_vol=True, show_oi=True, breached=None):
     items = []
     for g in zone_groups(ana, show_vol, show_oi):
         short, both, drop = group_tag(g)
@@ -689,9 +733,12 @@ def zone_items(ana, show_vol=True, show_oi=True):
         sup = g["side"] == "supply"
         color = ("#ef4444" if has_oi else "#9f1239") if sup else ("#16a34a" if has_oi else "#4d7c0f")
         alpha = 0.26 if both else 0.18 if any(m["rank"] == 1 for m in g["members"]) else 0.10
-        label = f"{'⭐ ' if both else ''}{'💧 ' if drop else ''}{short} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p)"
+        broke = bool(breached) and any(abs(float(b["low"]) - float(g["low"])) < 1e-6 and b["side"] == g["side"] for b in breached)
+        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{short} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p)"
+        if broke:
+            color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
         items.append({"label": label, "short": short, "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
-                      "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True})
+                      "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True, "broke": broke})
     return items
 
 
@@ -1081,8 +1128,8 @@ def zoom_shell_html(kind):
     return html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
 
 
-def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True):
-    items, lines = zone_items(ana, show_vol, show_oi), level_lines(ana, spot)
+def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None):
+    items, lines = zone_items(ana, show_vol, show_oi, breached), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
     flo, fhi = float(min(vals)), float(max(vals))
     fpad = (fhi - flo) * 0.04 or 5
@@ -1342,6 +1389,13 @@ def render_charts(df, spot, ana, n_strikes, height=440):
     if view.startswith("📈"):
         tf = st.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min")
         candles, src, err = fetch_candles(inst_key)
+        br = []
+        if not candles.empty:
+            # sirf aaj ke intraday candles par tod-ne ka check (30-min history par nahi)
+            br_c = resample_candles(candles, tf) if src == "intraday" else None
+            if br_c is not None:
+                br = breach_check(br_c, ana)
+        st.session_state["breaches"] = br
         if candles.empty:
             st.warning(
                 "Candle data nahi mila, isliye sirf zones aur levels dikha raha hoon. "
@@ -1357,7 +1411,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             else:
                 xfmt = "%d %b %H:%M"
                 st.caption("Aaj intraday data nahi, isliye pichle 7 din ke 30-min candles. Laal = Supply, Hara = Demand.")
-            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}", False, show_vol_zones, show_oi_zones)
+            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}", False, show_vol_zones, show_oi_zones, br)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
     else:
@@ -1391,6 +1445,9 @@ def render_page():
         st.subheader("🧠 Smart Analysis – Supply / Demand Zone (OI + Volume based)")
 
         bias_col = "#dcfce7" if "BULL" in ana["bias"] else "#fee2e2" if "BEAR" in ana["bias"] else "#fef9c3"
+        _br = st.session_state.get("breaches") or []
+        if _br:
+            st.markdown(breach_banner_html(_br), unsafe_allow_html=True)
         st.markdown(
             f'<div style="background:{bias_col};color:#111;padding:14px;border-radius:10px;font-size:18px;">'
             f'<b>Market Bias: {ana["bias"]}</b> &nbsp;|&nbsp; Score: {ana["points"]:+d} &nbsp;|&nbsp; PCR: {ana["pcr"]:.2f}'
