@@ -1499,34 +1499,6 @@ def render_page():
         )
         st.write("")
 
-        def zone_card(title, zs, side, bg, border):
-            html = (f'<div style="background:{bg};color:#111;border-left:6px solid {border};padding:10px;'
-                    f'border-radius:8px;margin-bottom:6px"><b>{title}</b><br>')
-            if not zs:
-                return html + 'Zone nahi mila</div>'
-            for z in zs:
-                p = z["primary"]
-                other = ana["zone_sets"]["oi" if z["basis"] == "vol" else "vol"][side]
-                both = any(abs(float(o["strike"]) - float(z["strike"])) < z["width"] for o in other)
-                html += (
-                    f'{"💧 " if z["rank"] == 2 else ""}<b>Zone {z["rank"]}:</b> '
-                    f'<span style="font-size:18px;font-weight:800">{fs(z["low"])} – {fs(z["high"])}</span> '
-                    f'(strike {p["strike"]}, {z["pct"]:.0f}%)<br>'
-                    f'📏 {zone_size_txt(z)} • Spot se {zone_dist_txt(z, side)}<br>'
-                    f'OI {p["oi"] / 1e5:.1f}L • Chg {p["chg"] / 1e5:+.1f}L • Vol {fmt_vol(p["vol"])}<br>'
-                    + ('⭐ OI aur Volume dono ka zone yahin<br>' if both else '')
-                )
-            return html + '</div>'
-
-        zs_ = ana["zone_sets"]
-        st.markdown("**📊 Volume ke hisaab se zone**")
-        va, vb = st.columns(2)
-        va.markdown(zone_card("🔴 SUPPLY (Call Volume)", zs_["vol"]["supply"], "supply", "#fff1f2", "#9f1239"), unsafe_allow_html=True)
-        vb.markdown(zone_card("🟢 DEMAND (Put Volume)", zs_["vol"]["demand"], "demand", "#f7fee7", "#4d7c0f"), unsafe_allow_html=True)
-        st.markdown("**📈 OI ke hisaab se zone**")
-        oa, ob = st.columns(2)
-        oa.markdown(zone_card("🔴 SUPPLY (Call OI)", zs_["oi"]["supply"], "supply", "#fef2f2", "#ef4444"), unsafe_allow_html=True)
-        ob.markdown(zone_card("🟢 DEMAND (Put OI)", zs_["oi"]["demand"], "demand", "#f0fdf4", "#16a34a"), unsafe_allow_html=True)
         if ana["liq"]:
             st.markdown(
                 "💧 **Liquidity strikes** (sabse zyada OI + Volume, jahan price aksar atakta/kheenchta hai): "
@@ -1577,6 +1549,35 @@ def render_page():
         st.markdown("---")
         st.subheader("📈 Charts – Supply / Demand Zones")
         render_charts(df, spot, ana, n_strikes)
+
+        def zone_card(title, zs, side, bg, border):
+            html = (f'<div style="background:{bg};color:#111;border-left:6px solid {border};padding:10px;'
+                    f'border-radius:8px;margin-bottom:6px"><b>{title}</b><br>')
+            if not zs:
+                return html + 'Zone nahi mila</div>'
+            for z in zs:
+                p = z["primary"]
+                other = ana["zone_sets"]["oi" if z["basis"] == "vol" else "vol"][side]
+                both = any(abs(float(o["strike"]) - float(z["strike"])) < z["width"] for o in other)
+                html += (
+                    f'{"💧 " if z["rank"] == 2 else ""}<b>Zone {z["rank"]}:</b> '
+                    f'<span style="font-size:18px;font-weight:800">{fs(z["low"])} – {fs(z["high"])}</span> '
+                    f'(strike {p["strike"]}, {z["pct"]:.0f}%)<br>'
+                    f'📏 {zone_size_txt(z)} • Spot se {zone_dist_txt(z, side)}<br>'
+                    f'OI {p["oi"] / 1e5:.1f}L • Chg {p["chg"] / 1e5:+.1f}L • Vol {fmt_vol(p["vol"])}<br>'
+                    + ('⭐ OI aur Volume dono ka zone yahin<br>' if both else '')
+                )
+            return html + '</div>'
+
+        zs_ = ana["zone_sets"]
+        st.markdown("**📊 Volume ke hisaab se zone**")
+        va, vb = st.columns(2)
+        va.markdown(zone_card("🔴 SUPPLY (Call Volume)", zs_["vol"]["supply"], "supply", "#fff1f2", "#9f1239"), unsafe_allow_html=True)
+        vb.markdown(zone_card("🟢 DEMAND (Put Volume)", zs_["vol"]["demand"], "demand", "#f7fee7", "#4d7c0f"), unsafe_allow_html=True)
+        st.markdown("**📈 OI ke hisaab se zone**")
+        oa, ob = st.columns(2)
+        oa.markdown(zone_card("🔴 SUPPLY (Call OI)", zs_["oi"]["supply"], "supply", "#fef2f2", "#ef4444"), unsafe_allow_html=True)
+        ob.markdown(zone_card("🟢 DEMAND (Put OI)", zs_["oi"]["demand"], "demand", "#f0fdf4", "#16a34a"), unsafe_allow_html=True)
 
 
 # Auto refresh: sirf data wala hissa dobara bante hai (fragment), poora page nahi, isliye screen smooth rehti hai
