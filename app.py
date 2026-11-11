@@ -15,7 +15,9 @@ import json
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from datetime import time as dt_time
 from urllib.parse import quote
 
 import numpy as np
@@ -173,6 +175,8 @@ def fetch_option_chain(inst_key, expiry):
                 "Call IV": cg.get("iv", 0),
                 "Call LTP": cm.get("ltp", 0),
                 "Strike": item.get("strike_price"),
+                "Call Key": c.get("instrument_key"),
+                "Put Key": p.get("instrument_key"),
                 "Put LTP": pm.get("ltp", 0),
                 "Put IV": pg.get("iv", 0),
                 "Put OI": pm.get("oi", 0),
@@ -398,7 +402,77 @@ def plain_cell(text, bg, bold=False):
     return f'<td style="background-color:{bg};{w}">{text}</td>'
 
 
-def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"):
+def shift_analysis(view, hist, cutoff):
+    """cutoff se pehle (jaise 9:20 tak) aur uske baad ka fark: volume kahan shift hua, OI kahan jama hua.
+    view: chain ki rows (Strike, Call Key, Put Key); hist: {instrument_key: DataFrame[time, vol, oi]}"""
+    rows = []
+    for _, r in view.iterrows():
+        for side, kc in (("Call", "Call Key"), ("Put", "Put Key")):
+            h = hist.get(r.get(kc))
+            if h is None or h.empty:
+                continue
+            tm = h["time"].dt.time
+            before, after = h[tm < cutoff], h[tm >= cutoff]
+            oi_now = float(h["oi"].iloc[-1])
+            if len(before):
+                oi_b = float(before["oi"].iloc[-1])
+            elif len(after):
+                oi_b = float(after["oi"].iloc[0])
+            else:
+                continue
+            rows.append({"side": side, "strike": fs(r["Strike"]), "vol_before": float(before["vol"].sum()),
+                         "vol_after": float(after["vol"].sum()), "oi_before": oi_b, "oi_now": oi_now, "oi_chg": oi_now - oi_b})
+    t = pd.DataFrame(rows)
+    out = {}
+    for side in ("Call", "Put"):
+        x = t[t["side"] == side] if not t.empty else t
+        if x is None or x.empty:
+            out[side] = None
+            continue
+        vb = x.sort_values("vol_before", ascending=False).iloc[0]
+        va = x.sort_values("vol_after", ascending=False).head(2)
+        oa = x[x["oi_chg"] > 0].sort_values("oi_chg", ascending=False).head(2)
+        oc = x.sort_values("oi_chg").iloc[0]
+        va_l = [(fs(r["strike"]), float(r["vol_after"])) for _, r in va.iterrows() if r["vol_after"] > 0]
+        oa_l = [(fs(r["strike"]), float(r["oi_chg"])) for _, r in oa.iterrows()]
+        if len(va_l) > 1 and va_l[1][1] < 0.25 * va_l[0][1]:       # bahut chhota doosra naam mat dikhao
+            va_l = va_l[:1]
+        if len(oa_l) > 1 and oa_l[1][1] < 0.25 * oa_l[0][1]:
+            oa_l = oa_l[:1]
+        out[side] = {
+            "vol_before_top": (fs(vb["strike"]), float(vb["vol_before"])) if vb["vol_before"] > 0 else None,
+            "vol_after_top": va_l,
+            "oi_add_top": oa_l,
+            "oi_cut_top": (fs(oc["strike"]), float(oc["oi_chg"])) if oc["oi_chg"] < 0 else None,
+        }
+    return out
+
+
+def shift_header_html(sh, side):
+    d = (sh or {}).get(side)
+    if not d:
+        return '<div class="sh">Is side ka data nahi mila</div>'
+    cut, lines = sh["cut"], []
+    va = d["vol_after_top"]
+    if va:
+        new = ", ".join(f"<b>{s_}</b> (+{fmt_vol(v)})" for s_, v in va)
+        vb = d["vol_before_top"]
+        if vb and va[0][0] != vb[0]:
+            lines.append(f"🔀 Volume shift: {cut} tak <b>{vb[0]}</b> par tha → ab <b>{va[0][0]}</b> par. Naya volume: {new}")
+        else:
+            lines.append(f"🔀 Volume wahi hai: {new}")
+    else:
+        lines.append("🔀 Volume: koi naya volume nahi")
+    label = "🛑 Resistance ban raha hai" if side == "Call" else "🟢 Support ban raha hai"
+    oa = d["oi_add_top"]
+    lines.append(f"{label}: " + (", ".join(f"<b>{s_}</b> (OI +{v / 1e5:.1f}L)" for s_, v in oa) if oa else "koi nahi (OI nahi badha)"))
+    if d["oi_cut_top"]:
+        s_, v = d["oi_cut_top"]
+        lines.append(f"↘️ OI sabse zyada ghata: <b>{s_}</b> ({v / 1e5:.1f}L)")
+    return '<div class="sh">' + "<br>".join(lines) + "</div>"
+
+
+def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT", shift=None):
     mx = {k: max(float(df[k].max()), 1.0) for k in ["Call OI", "Put OI", "Call Vol", "Put Vol"]}
     d = df.sort_values("Strike").reset_index(drop=True)
     atm_idx = int((d["Strike"] - spot).abs().idxmin())
@@ -466,10 +540,17 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
 
 
     put_cols = 7 if show_summary else 5
-    head1 = (
-        '<tr><th colspan="5" class="calls">CALLS</th><th></th>'
-        f'<th colspan="{put_cols}" class="puts">PUTS</th></tr>'
-    )
+    if shift:
+        mid = f'<th class="shmid">🔀 {shift["cut"]} → {shift["asof"]}</th>'
+        head1 = (
+            f'<tr><th colspan="5" class="calls">CALLS{shift_header_html(shift, "Call")}</th>{mid}'
+            f'<th colspan="{put_cols}" class="puts">PUTS{shift_header_html(shift, "Put")}</th></tr>'
+        )
+    else:
+        head1 = (
+            '<tr><th colspan="5" class="calls">CALLS</th><th></th>'
+            f'<th colspan="{put_cols}" class="puts">PUTS</th></tr>'
+        )
     head2 = "<tr><th>IV</th><th>LTP</th><th>OI Chg (L)</th><th>OI (L)</th><th>Volume</th><th>Strike</th>"
     head2 += "<th>Volume</th><th>OI (L)</th><th>OI Chg (L)</th><th>LTP</th>"
     if show_summary:
@@ -506,6 +587,8 @@ TABLE_CSS = """
       .pb.hi{color:#6d28d9;border-color:#c4b5fd;background:#fff;font-weight:800;}
       .pb.mid{color:#5b21b6;border-color:#a78bfa;background:#ede9fe;font-weight:700;}
       .pb.cy{color:#155e75;border-color:#22d3ee;background:#ecfeff;font-weight:700;}
+      .sh{white-space:normal;font-size:11px;font-weight:600;letter-spacing:0;text-align:left;padding:5px 8px 3px 8px;line-height:1.55;color:#111;position:sticky;left:4px;width:min(360px,calc(100vw - 24px));box-sizing:border-box;}
+      th.shmid{white-space:normal;font-size:10px;color:#6b7280;font-weight:700;}
       tr.atm td{border-top:2px solid #3b82f6;border-bottom:2px solid #3b82f6;}
       tr.spotrow td{background:linear-gradient(90deg,#f97316,#ef4444,#f97316);color:#fff;font-weight:800;
                     padding:4px;font-size:12px;letter-spacing:1px;border:none;}
@@ -1161,6 +1244,47 @@ def ask_ai(summary_text):
                   "Streamlit Secrets ya .env mein add karein.")
 
 
+# ---------------- Shifting: option ki intraday history (button dabane par) ----------------
+def fetch_option_hist(key):
+    try:
+        data = requests.get(f"https://api.upstox.com/v2/historical-candle/intraday/{enc(key)}/1minute",
+                            headers=HEADERS, timeout=20).json()
+        cs = (data.get("data") or {}).get("candles") or []
+        if not cs:
+            e = data.get("errors") or [{}]
+            return key, None, str(e[0].get("message") or data.get("status") or "khali")[:80]
+        c = pd.DataFrame(cs).iloc[:, :7]
+        c.columns = ["time", "o", "h", "l", "c", "vol", "oi"]
+        c["time"] = pd.to_datetime(c["time"], utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+        return key, c[["time", "vol", "oi"]].sort_values("time").reset_index(drop=True), ""
+    except Exception as e:
+        return key, None, str(e)[:80]
+
+
+def build_shift(df, spot, n, cutoff):
+    d = df.sort_values("Strike").reset_index(drop=True)
+    ai = int((d["Strike"] - spot).abs().idxmin())
+    view = d.iloc[max(ai - n, 0): ai + n + 1]
+    if "Call Key" not in view.columns:
+        return {"error": "Option ke instrument key nahi mile."}
+    keys = [k for k in list(view["Call Key"]) + list(view["Put Key"]) if isinstance(k, str) and k]
+    if not keys:
+        return {"error": "Upstox chain mein option ke instrument key nahi aaye, isliye shifting nahi nikal sakta."}
+    hist, errs = {}, []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for key, h, e in ex.map(fetch_option_hist, keys):
+            if h is not None:
+                hist[key] = h
+            else:
+                errs.append(e)
+    if not hist:
+        return {"error": "Option ki history nahi aayi. Upstox ka jawab: " + (errs[0] if errs else "khali")}
+    res = shift_analysis(view, hist, cutoff)
+    res.update({"cut": cutoff.strftime("%H:%M"), "asof": max(h["time"].max() for h in hist.values()).strftime("%H:%M"),
+                "n_ok": len(hist), "n_all": len(keys)})
+    return res
+
+
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
 def fetch_candles(inst_key):
@@ -1201,9 +1325,16 @@ def fetch_candles(inst_key):
         return pd.DataFrame(), "error", f"{err} {e}".strip()
 
 
+def current_shift():
+    sh = st.session_state.get("shift")
+    if sh and sh.get("inst") == inst_name and sh.get("exp") == expiry_date and not sh.get("error"):
+        return sh
+    return None
+
+
 def render_table(df, spot, n, ana, show_summary, label, height):
     components.html(table_shell_html(), height=height, scrolling=True)
-    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label)}), height=0)
+    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift())}), height=0)
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
@@ -1320,6 +1451,21 @@ def render_page():
         # ---- Table ----
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
+        sc1, sc2, sc3 = st.columns([2, 2, 1])
+        cutoff_t = sc1.time_input("Shifting ka aadhar samay (isse pehle ka data 'purana')", value=dt_time(9, 20), step=60)
+        if sc2.button(f"🔀 Shifting dekho ({cutoff_t:%H:%M} ke baad)"):
+            with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
+                res = build_shift(df, spot, n_strikes, cutoff_t)
+            st.session_state["shift"] = {"inst": inst_name, "exp": expiry_date, **res}
+        if current_shift() and sc3.button("❌ Hatao"):
+            st.session_state["shift"] = None
+        sh_state = st.session_state.get("shift")
+        if sh_state and sh_state.get("inst") == inst_name and sh_state.get("exp") == expiry_date:
+            if sh_state.get("error"):
+                st.warning(sh_state["error"])
+            else:
+                st.caption(f"🔀 Shifting {sh_state['cut']} se {sh_state['asof']} tak ki (option chain ke upar CALLS/PUTS mein dikh rahi hai). "
+                           f"{sh_state['n_ok']}/{sh_state['n_all']} options ki history mili. Naya dekhne ke liye button dobara dabayein.")
         st.caption(
             "Peela = ITM | Gehra violet = sabse zyada OI/Volume (100%) | Halka violet = 75% se upar | Aasmani = 60% se upar (Zone 2 ke layak) | "
         "Supply/Demand Zone 'Zone' column mein | "
