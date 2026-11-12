@@ -1574,6 +1574,20 @@ def zone_backtest(c, ana, look=12):
     return rows
 
 
+def zone_test_table_html(rows):
+    """Backtest table: light/dark dono mein padhne layak (st.dataframe light mode mein gehra dikhta tha)."""
+    cols = ["Zone", "Touch", "Ruka", "Toota", "Dekha nahi", "Ruka %"]
+    th = "".join(f'<th style="text-align:left;padding:6px 8px;background:#f3f4f6;color:#111;border-bottom:2px solid #d1d5db">{c}</th>' for c in cols)
+    body = ""
+    for r in rows:
+        pct = "—" if r["Ruka %"] is None else f'{r["Ruka %"]}%'
+        cells = [r["Zone"], r["Touch"], r["Ruka"], r["Toota"], r["Dekha nahi"], pct]
+        body += "<tr>" + "".join(
+            f'<td style="padding:6px 8px;color:#111;background:#ffffff;border-bottom:1px solid #e5e7eb">{c}</td>' for c in cells) + "</tr>"
+    return ('<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+            f'<thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>')
+
+
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
 def fetch_candles(inst_key):
@@ -1659,7 +1673,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         zb = st.session_state.get("zbt")
         if zb and zb["inst"] == inst_name:
             if zb["rows"]:
-                st.dataframe(pd.DataFrame(zb["rows"]), hide_index=True, use_container_width=True)
+                st.markdown(zone_test_table_html(zb["rows"]), unsafe_allow_html=True)
                 st.caption(f"{zb['tf']} min candles par, zone mein aane ke baad aage 12 candles dekhe gaye. "
                            "Ruka = zone se wapas palta. Toota = 2 candle lagatar zone ke bahar. "
                            "Sample chhota hai, isliye ye sirf ek jhalak hai, pakka saboot nahi.")
