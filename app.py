@@ -788,6 +788,9 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None):
         label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{short} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p)"
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
+        pa = (ana or {}).get("pressure_alert")
+        if pa is not None and g["side"] == "demand" and abs(float(g["level"]) - float(pa)) < 1e-6:
+            label = "⚠️ BEARISH PRESSURE · " + label
         items.append({"label": label, "short": short, "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
                       "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True, "broke": broke})
     return items
@@ -1386,6 +1389,108 @@ def build_shift(df, spot, n, cutoff):
     return res
 
 
+# ---------------- Pressure matrix (9:17 se 3 ghante, support/resistance ke tees) ----------------
+PRESS_START, PRESS_END = dt_time(9, 17), dt_time(12, 17)
+PRESS_LABEL = {"STRONG": "मज़बूत (दायरा)", "UP": "⬆ बुलिश", "DOWN": "⬇ बेयरिश"}
+PRESS_COL = {("STRONG", "STRONG"): 1, ("STRONG", "DOWN"): 2, ("STRONG", "UP"): 3,
+             ("DOWN", "STRONG"): 4, ("UP", "STRONG"): 5, ("DOWN", "DOWN"): 6,
+             ("UP", "UP"): 7, ("DOWN", "UP"): 8, ("UP", "DOWN"): 9}
+
+
+def _win_metrics(view, hist):
+    """Har option ke liye 9:17-12:17 ka Volume, aakhri OI, aur kya OI badh raha hai (aur volume dusre half mein zyada)."""
+    rows = []
+    for _, r in view.iterrows():
+        for side, kc in (("Call", "Call Key"), ("Put", "Put Key")):
+            h = hist.get(r.get(kc))
+            if h is None or h.empty:
+                continue
+            tm = h["time"].dt.time
+            w = h[(tm >= PRESS_START) & (tm <= PRESS_END)]
+            if w.empty:
+                continue
+            half = max(len(w) // 2, 1)
+            v1 = float(w["vol"].iloc[:half].sum())
+            v2 = float(w["vol"].iloc[half:].sum())
+            rows.append({"side": side, "strike": float(r["Strike"]), "vol": float(w["vol"].sum()),
+                         "oi_last": float(w["oi"].iloc[-1]),
+                         "rising": bool(float(w["oi"].iloc[-1]) > float(w["oi"].iloc[0]) and v2 >= v1)})
+    return pd.DataFrame(rows)
+
+
+def _zone_state(m, side, zone_k, spot, kind):
+    """Shart (aapke niyam ke hisaab se):
+    - Bahar wali taraf (res: zone se upar; sup: zone se neeche): Volume AUR OI dono 75%+ aur badhte hon.
+    - Andar wali taraf (spot ki taraf): dono mein se ek bhi 75%+ aur badhta ho.
+    res: bahar = UP (bullish), andar = DOWN (bearish). sup: bahar = DOWN (bearish), andar = UP (bullish)."""
+    if m.empty or zone_k is None:
+        return "STRONG", None
+    x = m[m["side"] == side].copy()
+    if x.empty:
+        return "STRONG", None
+    x["sv"] = x["vol"] / max(float(x["vol"].max()), 1.0) * 100
+    x["so"] = x["oi_last"] / max(float(x["oi_last"].max()), 1.0) * 100
+    if kind == "res":
+        out_m = x["strike"] > zone_k
+        in_m = (x["strike"] > spot) & (x["strike"] < zone_k)
+        out_state, in_state = "UP", "DOWN"
+    else:
+        out_m = x["strike"] < zone_k
+        in_m = (x["strike"] < spot) & (x["strike"] > zone_k)
+        out_state, in_state = "DOWN", "UP"
+    cand = x[out_m & (x["sv"] >= 75) & (x["so"] >= 75) & x["rising"]]
+    if not cand.empty:
+        return out_state, float(cand.sort_values("vol", ascending=False).iloc[0]["strike"])
+    cand = x[in_m & ((x["sv"] >= 75) | (x["so"] >= 75)) & x["rising"]]
+    if not cand.empty:
+        return in_state, float(cand.sort_values("vol", ascending=False).iloc[0]["strike"])
+    return "STRONG", None
+
+
+def build_pressure_full(df, spot, n, ana):
+    d = df.sort_values("Strike").reset_index(drop=True)
+    ai = int((d["Strike"] - spot).abs().idxmin())
+    view = d.iloc[max(ai - n, 0): ai + n + 1]
+    keys = [k for k in list(view["Call Key"]) + list(view["Put Key"]) if isinstance(k, str) and k]
+    if not keys:
+        return {"error": "Option ke instrument key nahi mile, pressure nahi nikal sakta."}
+    hist, errs = {}, []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for key, h, e in ex.map(fetch_option_hist, keys):
+            if h is not None:
+                hist[key] = h
+            else:
+                errs.append(e)
+    if not hist:
+        return {"error": "Option ki history nahi aayi. Upstox ka jawab: " + (errs[0] if errs else "khali")}
+    m = _win_metrics(view, hist)
+    if m.empty:
+        return {"error": f"{PRESS_START:%H:%M} se {PRESS_END:%H:%M} ka data abhi nahi hai. Market khulne ke baad dobara dabayein."}
+    sup_k = float(ana["demand"]["primary"]["strike"]) if ana.get("demand") else None
+    res_k = float(ana["supply"]["primary"]["strike"]) if ana.get("supply") else None
+    s_state, s_at = _zone_state(m, "Put", sup_k, spot, "sup")
+    r_state, r_at = _zone_state(m, "Call", res_k, spot, "res")
+    return {
+        "support": {"state": s_state, "zone": sup_k, "at": s_at},
+        "resistance": {"state": r_state, "zone": res_k, "at": r_at},
+        "column": PRESS_COL[(s_state, r_state)],
+        "alert": s_state == "DOWN" and r_state == "DOWN",
+        "support_strike": sup_k,
+        "n_ok": len(hist), "n_all": len(keys),
+    }
+
+
+def pressure_html(pr):
+    def row(name, d):
+        if d["zone"] is None:
+            return f"{name}: zone nahi mila"
+        extra = f" (shift {fs(d['at'])} par)" if d["at"] else ""
+        return f"{name} <b>{fs(d['zone'])}</b> → {PRESS_LABEL[d['state']]}{extra}"
+    return (f"🧭 <b>Pressure matrix</b> ({PRESS_START:%H:%M}–{PRESS_END:%H:%M}) · Column <b>{pr['column']}</b><br>"
+            f"{row('Support', pr['support'])}<br>{row('Resistance', pr['resistance'])}<br>"
+            f"<span style='font-size:11px;color:#374151'>{pr['n_ok']}/{pr['n_all']} options ka data mila</span>")
+
+
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
 def fetch_candles(inst_key):
@@ -1510,6 +1615,20 @@ def render_page():
         )
         st.write("")
 
+        if st.button("🧭 Pressure matrix dekho (9:17 se 3 ghante)"):
+            with st.spinner("Pressure nikal raha hoon (option ki history)..."):
+                st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
+                                                **build_pressure_full(df, spot, n_strikes, ana)}
+        pr = st.session_state.get("pressure")
+        same = bool(pr) and pr.get("inst") == inst_name and pr.get("exp") == expiry_date
+        if same and pr.get("error"):
+            st.warning(pr["error"])
+        elif same:
+            st.markdown(f'<div style="background:#f5f3ff;color:#111;padding:10px;border-radius:8px">{pressure_html(pr)}</div>',
+                        unsafe_allow_html=True)
+            if pr["alert"]:
+                st.error("⚠️ Support ke paas BEARISH pressure: support aur resistance dono ⬇ hain. Chart par support zone par alert dikhega.")
+        ana["pressure_alert"] = pr["support_strike"] if (same and not pr.get("error") and pr.get("alert")) else None
         if ana["liq"]:
             st.markdown(
                 "💧 **Liquidity strikes** (sabse zyada OI + Volume, jahan price aksar atakta/kheenchta hai): "
