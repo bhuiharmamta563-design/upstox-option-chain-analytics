@@ -865,7 +865,7 @@ ZOOM_JS = r"""
 (function(){
 var CFG = __CFG__;
 var svg = document.getElementById('svg'), stage = document.getElementById('stage'), info = document.getElementById('info');
-var W = CFG.W, H = CFG.H, L = CFG.L, T = CFG.T, pw = CFG.pw, ph = CFG.ph;
+var W = CFG.W, H = CFG.H, L = CFG.L, T = CFG.T, B = CFG.B, pw = CFG.pw, ph = CFG.ph;
 var GRID = CFG.dark ? '#263241' : '#eef0f3', HALO = CFG.dark ? '#0e1117' : '#fff';
 var D = null, n = 0, sel = -1, touched = false, lastV = null, HINT = info.textContent;
 var DEF = {a: 0, b: 1, lo: 0, hi: 1}, view = {a: 0, b: 1, lo: 0, hi: 1};
@@ -1112,6 +1112,34 @@ stage.addEventListener('dblclick', reset);
 document.getElementById('zin').addEventListener('click', function(){ zoomX(0.7, (view.a + view.b) / 2); zoomY(0.7, (view.hi + view.lo) / 2); changed(); });
 document.getElementById('zout').addEventListener('click', function(){ zoomX(1 / 0.7, (view.a + view.b) / 2); zoomY(1 / 0.7, (view.hi + view.lo) / 2); changed(); });
 
+function layoutOverlays(){
+  var pc = function(x, tot){ return (x / tot * 100).toFixed(3) + '%'; };
+  var zp = document.getElementById('zp'), za = document.getElementById('za'), zt = document.getElementById('zt');
+  zp.style.left = pc(L, W); zp.style.top = pc(T, H); zp.style.width = pc(pw, W); zp.style.height = pc(ph, H);
+  za.style.left = pc(CFG.yax[0], W); za.style.top = pc(T, H); za.style.width = pc(CFG.yax[1] - CFG.yax[0], W); za.style.height = pc(ph, H);
+  zt.style.left = pc(L, W); zt.style.top = pc(T + ph, H); zt.style.width = pc(pw, W); zt.style.height = pc(H - T - ph, H);
+}
+function setH(nh){
+  H = nh; ph = H - T - B;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  layoutOverlays(); draw();
+}
+function onFS(){
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  setTimeout(function(){
+    if (fsEl) {
+      var st = document.getElementById('stage'), top = document.querySelector('.top'), inf = document.getElementById('info');
+      var chrome = (top ? top.offsetHeight : 0) + (inf && inf.style.display !== 'none' ? inf.offsetHeight : 0) + 24;
+      var availH = window.innerHeight - chrome, availW = st.offsetWidth || window.innerWidth;
+      setH(Math.max(CFG.H, Math.min(1400, Math.round(W * availH / availW))));
+    } else {
+      setH(CFG.H);
+    }
+  }, 80);
+}
+document.addEventListener('fullscreenchange', onFS);
+document.addEventListener('webkitfullscreenchange', onFS);
+layoutOverlays();
 window.__cid = CFG.kind;
 window.__update = function(p){
   if (p.v === lastV) return;
@@ -1164,7 +1192,8 @@ def zoom_shell_html(kind):
         "#zp{touch-action:pan-y;cursor:crosshair}#za,#zt{touch-action:none}#za{cursor:ns-resize}#zt{cursor:ew-resize}"
         "#oc{background:#fff}"
         "#oc:fullscreen{overflow:auto;padding:6px}#oc:-webkit-full-screen{overflow:auto;padding:6px}"
-        "#oc:fullscreen .inner,#oc:-webkit-full-screen .inner{max-width:calc((100vh - 140px) * " + f"{ratio:.4f}" + ") !important;min-width:0!important}"
+        "#oc:fullscreen .inner,#oc:-webkit-full-screen .inner{max-width:none!important;width:100%!important;min-width:0!important}"
+        "#oc:fullscreen #info,#oc:-webkit-full-screen #info,#oc:fullscreen .top>div:first-child,#oc:-webkit-full-screen .top>div:first-child{display:none!important}"
         "</style>"
     )
     hint = "2 ungli pinch = zoom | khinchein = chart khiskao | Axis par khinchein = price/time zoom | tap = data | double tap = reset"
@@ -1491,6 +1520,51 @@ def pressure_html(pr):
             f"<span style='font-size:11px;color:#374151'>{pr['n_ok']}/{pr['n_all']} options ka data mila</span>")
 
 
+# ---------------- Price backtest: zone par price kitni baar ruka (sirf candles, koi alert nahi) ----------------
+def zone_backtest(c, ana, look=12):
+    """Har zone ke liye: price kitni baar zone mein aaya, aur aage 'look' candles mein wo ruka (rukaa) ya toota (2 candle lagatar bahar close).
+    Supply: upar se aakar zone ke andar aaye. Demand: neeche se. Ye sirf ek jhalak hai, pakka saboot nahi."""
+    rows = []
+    if c is None or len(c) < 3 or not ana:
+        return rows
+    c = c.reset_index(drop=True)
+    hi_s, lo_s, cl_s = c["high"].astype(float).values, c["low"].astype(float).values, c["close"].astype(float).values
+    n = len(c)
+    for it in zone_items(ana):
+        side, lo, hi = it["key"], float(it["lo"]), float(it["hi"])
+        touches = rukaa = toota = dekha = 0
+        for i in range(1, n):
+            if side == "supply":
+                entered = hi_s[i] >= lo and hi_s[i - 1] < lo
+            else:
+                entered = lo_s[i] <= hi and lo_s[i - 1] > hi
+            if not entered:
+                continue
+            touches += 1
+            out = "dekha"
+            for j in range(i + 1, min(n, i + 1 + look)):
+                if side == "supply":
+                    if cl_s[j] < lo:
+                        out = "rukaa"; break
+                    if cl_s[j] > hi and j + 1 < n and cl_s[j + 1] > hi:
+                        out = "toota"; break
+                else:
+                    if cl_s[j] > hi:
+                        out = "rukaa"; break
+                    if cl_s[j] < lo and j + 1 < n and cl_s[j + 1] < lo:
+                        out = "toota"; break
+            if out == "rukaa":
+                rukaa += 1
+            elif out == "toota":
+                toota += 1
+            else:
+                dekha += 1
+        pct = round(rukaa / (rukaa + toota) * 100, 1) if (rukaa + toota) else None
+        rows.append({"Zone": it["label"], "Touch": touches, "Ruka": rukaa, "Toota": toota,
+                     "Dekha nahi": dekha, "Ruka %": pct})
+    return rows
+
+
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
 def fetch_candles(inst_key):
@@ -1571,6 +1645,17 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}", False, show_vol_zones, show_oi_zones, br)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
+        if st.button("📊 Zone price test (aaj ke candles par)"):
+            st.session_state["zbt"] = {"inst": inst_name, "rows": zone_backtest(candles, ana, 12), "tf": tf}
+        zb = st.session_state.get("zbt")
+        if zb and zb["inst"] == inst_name:
+            if zb["rows"]:
+                st.dataframe(pd.DataFrame(zb["rows"]), hide_index=True, use_container_width=True)
+                st.caption(f"{zb['tf']} min candles par, zone mein aane ke baad aage 12 candles dekhe gaye. "
+                           "Ruka = zone se wapas palta. Toota = 2 candle lagatar zone ke bahar. "
+                           "Sample chhota hai, isliye ye sirf ek jhalak hai, pakka saboot nahi.")
+            else:
+                st.info("Test ke liye candles ya zone kam hain.")
     else:
         components.html(zoom_shell_html("oi"), height=height, scrolling=True)
         components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
