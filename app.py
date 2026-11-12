@@ -100,6 +100,11 @@ PAGE_LIGHT = """<style>
 [data-testid=stSelectbox] div, [data-testid=stSelectbox] span, [data-testid=stSelectbox] input, [data-testid=stSelectbox] [data-baseweb=select] div {background-color:#ffffff !important;color:#111111 !important;}
 [data-testid=stTimeInput] input, [data-testid=stTimeInput] [data-baseweb=input], [data-testid=stTimeInput] [data-baseweb=input] div {background:#ffffff !important;color:#111111 !important;}
 [data-testid=stSelectbox] svg, [data-testid=stTimeInput] svg {fill:#111111 !important;}
+[data-testid=stNumberInput] button, [data-testid=stNumberInput] button div {background:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
+[data-testid=stNumberInput] button svg {fill:#111111 !important;color:#111111 !important;}
+[data-testid=stHeader], [data-testid=stToolbar] {background:#ffffff !important;}
+[data-testid=stToolbar] *, [data-testid=stHeader] * {color:#111111 !important;}
+[data-testid=stToolbar] svg, [data-testid=stHeader] svg {fill:#111111 !important;stroke:#111111 !important;}
 [data-testid=stButton] button, [data-testid=stBaseButton-secondary] {background:#ffffff !important;color:#111111 !important;border:1px solid #d1d5db !important;}
 [data-testid=stButton] button:hover {border-color:#2563eb !important;color:#2563eb !important;}
 [data-baseweb=popover] ul, [data-baseweb=menu], [data-baseweb=popover] li {background:#ffffff !important;color:#111111 !important;}
