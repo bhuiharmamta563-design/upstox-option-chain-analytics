@@ -1169,7 +1169,7 @@ def zoom_shell_html(kind):
     )
     hint = "2 ungli pinch = zoom | khinchein = chart khiskao | Axis par khinchein = price/time zoom | tap = data | double tap = reset"
     html = (
-        f'{css}<div id="oc" class="{_wc()}"><div class="top"><div>{_legend()}</div>'
+        f'{css}<div id="oc" class="{_wc()}"><div class="top"><div></div>'
         '<div class="btns"><button id="zin" class="g" title="Zoom in">＋</button><button id="zout" class="g" title="Zoom out">－</button>'
         '<button id="zrs" class="g" title="Reset">⟲</button>'
         + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
@@ -1566,10 +1566,8 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         else:
             if src == "intraday":
                 candles, xfmt = resample_candles(candles, tf), "%H:%M"
-                st.caption("Aaj ke 1-min candles se bana chart. Gehri patti = Zone 1, halki patti = Zone 2, neeli dotted line = Liquidity.")
             else:
                 xfmt = "%d %b %H:%M"
-                st.caption("Aaj intraday data nahi, isliye pichle 7 din ke 30-min candles. Laal = Supply, Hara = Demand.")
             data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}", False, show_vol_zones, show_oi_zones, br)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
@@ -1629,27 +1627,6 @@ def render_page():
             if pr["alert"]:
                 st.error("⚠️ Support ke paas BEARISH pressure: support aur resistance dono ⬇ hain. Chart par support zone par alert dikhega.")
         ana["pressure_alert"] = pr["support_strike"] if (same and not pr.get("error") and pr.get("alert")) else None
-        if ana["liq"]:
-            st.markdown(
-                "💧 **Liquidity strikes** (sabse zyada OI + Volume, jahan price aksar atakta/kheenchta hai): "
-                + " | ".join(f"**{q['strike']}** (OI {q['oi'] / 1e5:.0f}L, Vol {fmt_vol(q['vol'])})" for q in ana["liq"])
-            )
-
-        if st.button("🤖 AI se detailed analysis (Gemini free / Claude)"):
-            summary = {
-                "instrument": inst_name, "spot": spot, "expiry": expiry_date, "bias": ana["bias"], "pcr": round(ana["pcr"], 2),
-                "max_pain": ana["max_pain"], "zone_width_points": ana["zone_width"],
-                "volume_zones": ana["zone_sets"]["vol"], "oi_zones": ana["zone_sets"]["oi"],
-                "liquidity_strikes": ana["liq"], "bias_reasons": ana["reasons"],
-                "net_call_oi_change": ana["chg_c"], "net_put_oi_change": ana["chg_p"],
-            }
-            with st.spinner("AI analysis ho rahi hai..."):
-                text, err = ask_ai(json.dumps(summary, default=float))
-            st.session_state["ai_out"] = (inst_name, "warn" if err else "ok", err or text)
-        ai_out = st.session_state.get("ai_out")
-        if ai_out and ai_out[0] == inst_name:
-            (st.warning if ai_out[1] == "warn" else st.markdown)(ai_out[2])
-
         # ---- Table ----
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
@@ -1668,11 +1645,6 @@ def render_page():
             else:
                 st.caption(f"🔀 Shifting {sh_state['cut']} se {sh_state['asof']} tak ki (option chain ke upar CALLS/PUTS mein dikh rahi hai). "
                            f"{sh_state['n_ok']}/{sh_state['n_all']} options ki history mili. Naya dekhne ke liye button dobara dabayein.")
-        st.caption(
-            "Peela = ITM | Gehra violet = sabse zyada OI/Volume (100%) | Halka violet = 75% se upar | Aasmani = 60% se upar (Zone 2 ke layak) | "
-        "Supply/Demand Zone 'Zone' column mein | "
-            "Orange line = spot (market yahan chal raha hai)"
-        )
         render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
 
         # ---- Charts with Supply / Demand zones ----
