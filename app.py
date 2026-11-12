@@ -5,7 +5,7 @@ Install : pip install streamlit pandas numpy requests python-dotenv
 Run     : streamlit run app.py
 
 Secrets / .env keys:
-  (Keys ab har user sidebar mein apni daalta hai, secrets mein nahi)
+  UPSTOX_ACCESS_TOKEN = "..."   (required, roz naya token)
   GEMINI_API_KEY      = "..."   (optional, FREE AI - aistudio.google.com)
   ANTHROPIC_API_KEY   = "..."   (optional, paid AI)
   GEMINI_MODEL        = "..."   (optional, default gemini-flash-latest)
@@ -30,24 +30,19 @@ from dotenv import load_dotenv
 st.set_page_config(page_title="Veer Zone Pro", layout="wide")
 
 load_dotenv()
-PAGE_DARK = "<style>.stApp{background:#0e1117;color:#e5e7eb}[data-testid=stSidebar]{background:#161b22}</style>"
-st.sidebar.header("🔑 Aapki keys")
-ACCESS_TOKEN = st.sidebar.text_input(
-    "Upstox Access Token (zaroori)", type="password", key="tok_in",
-    help="Sirf is browser session mein rehta hai, kahin save nahi hota. Roz naya token daalein.",
-).strip()
-st.sidebar.text_input("Gemini API key (optional, AI ke liye)", type="password", key="gem_key",
-                      help="Sirf is session mein. Free key: aistudio.google.com")
-st.sidebar.text_input("Claude API key (optional, AI ke liye)", type="password", key="cl_key",
-                      help="Sirf is session mein. Paid key hai.")
+try:
+    ACCESS_TOKEN = st.secrets["UPSTOX_ACCESS_TOKEN"]
+except Exception:
+    ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
 if not ACCESS_TOKEN:
-    st.info("Shuru karne ke liye sidebar mein apna Upstox Access Token daalein. Ye aapke browser session mein hi rehta hai.")
+    st.error("⚠️ Access Token nahi mila! Kripya Streamlit Secrets ya .env file check karein.")
     st.stop()
 
-
-def _hdr(t):
-    return {"Accept": "application/json", "Authorization": f"Bearer {t}"}
+HEADERS = {
+    "Accept": "application/json",
+    "Authorization": f"Bearer {ACCESS_TOKEN}",
+}
 
 # ---------------- Instrument selection (Index / Stock) ----------------
 INDEXES = {
@@ -73,7 +68,6 @@ def enc(key):
 
 
 def resolve_stock(symbol):
-    HEADERS = _hdr(ACCESS_TOKEN)
     """Stock symbol -> Upstox instrument_key (Instrument Search API), session mein yaad rakhta hai."""
     cache = st.session_state.setdefault("stock_keys", {})
     if symbol in cache:
@@ -131,13 +125,11 @@ else:
 
 st.title(f"📊 Veer Zone Pro · {inst_name}")
 st.caption("Live Option Chain & Zone Analytics")
-st.caption("⚠️ Ye sirf option chain ka data aur ganit ka vishleshan hai. Ye trade ki salah ya buy/sell signal nahi hai. Nivesh ka faisla aap khud karein.")
 
 
 # ---------------- Expiry dates (auto) ----------------
 @st.cache_data(ttl=3600)
-def fetch_expiries(inst_key, token):
-    HEADERS = _hdr(token)
+def fetch_expiries(inst_key):
     url = f"https://api.upstox.com/v2/option/contract?instrument_key={enc(inst_key)}"
     try:
         data = requests.get(url, headers=HEADERS).json()
@@ -149,7 +141,7 @@ def fetch_expiries(inst_key, token):
     return []
 
 
-expiry_options = fetch_expiries(inst_key, ACCESS_TOKEN)
+expiry_options = fetch_expiries(inst_key)
 if not expiry_options:
     st.error(f"⚠️ {inst_name} ki expiry dates load nahi hui! Access Token check karein, ya is instrument ke F&O options na hon (ya symbol badal gaya ho, jaise Tata Motors ab TMPV/TMCV).")
     st.stop()
@@ -176,8 +168,7 @@ if st.sidebar.button("🔄 Refresh now"):
 
 # ---------------- Option chain data ----------------
 @st.cache_data(ttl=1)
-def fetch_option_chain(inst_key, expiry, token):
-    HEADERS = _hdr(token)
+def fetch_option_chain(inst_key, expiry):
     url = (
         "https://api.upstox.com/v2/option/chain"
         f"?instrument_key={enc(inst_key)}&expiry_date={expiry}"
@@ -1253,17 +1244,20 @@ def resample_candles(c, minutes):
 
 # ---------------- Optional: Claude AI commentary ----------------
 def get_anthropic_key():
-    return (st.session_state.get("cl_key") or "").strip() or None
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        return os.getenv("ANTHROPIC_API_KEY")
 
 
 def ask_claude(summary_text):
     key = get_anthropic_key()
     if not key:
-        return None, "Claude key nahi mili. Sidebar mein apni Claude key daalein."
+        return None, "ANTHROPIC_API_KEY nahi mila. Streamlit Secrets ya .env mein add karein."
     prompt = (
         "Tum ek experienced Indian options market analyst ho. Neeche option chain ka analysis data hai. "
         "Hinglish mein short, clear analysis do: market bias, supply zone (resistance), demand zone (support), "
-        "sirf data ka saaraansh do (bias, zones, liquidity). Koi buy/sell ya trade ki salah mat do. Last mein 1 line disclaimer do ki ye financial advice nahi hai.\n\n"
+        "breakout/breakdown ke levels, aur risk. Last mein 1 line disclaimer do (financial advice nahi hai).\n\n"
         + summary_text
     )
     try:
@@ -1294,14 +1288,14 @@ def ask_gemini(summary_text):
     """FREE option: Google Gemini. Do tarah ki key chalti hai:
        - 'AIza...'  : Google AI Studio key (generativelanguage endpoint)
        - 'AQ.Ab8...': Vertex AI express-mode key (aiplatform endpoint)"""
-    key = (st.session_state.get("gem_key") or "").strip() or None
+    key = get_secret("GEMINI_API_KEY")
     if not key:
-        return None, "Gemini key nahi mili. Sidebar mein apni Gemini key daalein."
+        return None, "GEMINI_API_KEY nahi mila."
     vertex = key.startswith("AQ.")
     prompt = (
         "Tum ek experienced Indian options market analyst ho. Neeche option chain ka analysis data hai. "
         "Hinglish mein short, clear analysis do: market bias, supply zone (resistance), demand zone (support), "
-        "sirf data ka saaraansh do (bias, zones, liquidity). Koi buy/sell ya trade ki salah mat do. Last mein 1 line disclaimer do ki ye financial advice nahi hai.\n\n"
+        "breakout/breakdown ke levels, aur risk. Last mein 1 line disclaimer do (financial advice nahi hai).\n\n"
         + summary_text
     )
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
@@ -1343,17 +1337,16 @@ def ask_gemini(summary_text):
 
 def ask_ai(summary_text):
     """Pehle free Gemini, key na ho to Claude."""
-    if st.session_state.get("gem_key"):
+    if get_secret("GEMINI_API_KEY"):
         return ask_gemini(summary_text)
-    if st.session_state.get("cl_key"):
+    if get_secret("ANTHROPIC_API_KEY"):
         return ask_claude(summary_text)
-    return None, ("Koi AI key nahi. Sidebar mein apni free Gemini key (aistudio.google.com) "
-                  "ya Claude key daalein.")
+    return None, ("Koi AI key nahi mila. Free ke liye GEMINI_API_KEY (aistudio.google.com) "
+                  "Streamlit Secrets ya .env mein add karein.")
 
 
 # ---------------- Shifting: option ki intraday history (button dabane par) ----------------
 def fetch_option_hist(key):
-    HEADERS = _hdr(ACCESS_TOKEN)
     try:
         data = requests.get(f"https://api.upstox.com/v2/historical-candle/intraday/{enc(key)}/1minute",
                             headers=HEADERS, timeout=20).json()
@@ -1395,8 +1388,7 @@ def build_shift(df, spot, n, cutoff):
 
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
-def fetch_candles(inst_key, token):
-    HEADERS = _hdr(token)
+def fetch_candles(inst_key):
     key = enc(inst_key)
 
     def parse(data):
@@ -1450,7 +1442,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
     view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones"], horizontal=True)
     if view.startswith("📈"):
         tf = st.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min")
-        candles, src, err = fetch_candles(inst_key, ACCESS_TOKEN)
+        candles, src, err = fetch_candles(inst_key)
         br = []
         if not candles.empty:
             # sirf aaj ke intraday candles par tod-ne ka check (30-min history par nahi)
@@ -1484,7 +1476,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
 
 # ---------------- Page ----------------
 def render_page():
-    df, spot = fetch_option_chain(inst_key, expiry_date, ACCESS_TOKEN)
+    df, spot = fetch_option_chain(inst_key, expiry_date)
 
     if df.empty:
         st.warning(f"⚠️ {inst_name} ka data load nahi hua! Upstox Access Token check karein. Stock ho to uske F&O options na hon ya symbol badal gaya ho to bhi data nahi aata.")
