@@ -99,6 +99,7 @@ PAGE_LIGHT = """<style>
 [data-baseweb=select] > div, [data-baseweb=input], [data-baseweb=input] input, [data-testid=stNumberInput] input {background:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
 [data-testid=stSelectbox] div, [data-testid=stSelectbox] span, [data-testid=stSelectbox] input, [data-testid=stSelectbox] [data-baseweb=select] div {background-color:#ffffff !important;color:#111111 !important;}
 [data-testid=stTimeInput] input, [data-testid=stTimeInput] [data-baseweb=input], [data-testid=stTimeInput] [data-baseweb=input] div {background:#ffffff !important;color:#111111 !important;}
+[data-testid=stTimeInput] *, [data-testid=stTimeInput] input {background-color:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
 [data-testid=stSelectbox] svg, [data-testid=stTimeInput] svg {fill:#111111 !important;}
 [data-testid=stNumberInput] button, [data-testid=stNumberInput] button div {background:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
 [data-testid=stNumberInput] button svg {fill:#111111 !important;color:#111111 !important;}
