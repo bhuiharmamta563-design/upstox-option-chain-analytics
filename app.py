@@ -1750,21 +1750,6 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
-@st.cache_data(ttl=600)
-def fetch_news(query):
-    """Google News ka RSS (bina key ke). Har 10 minute mein taaza."""
-    import xml.etree.ElementTree as ET
-    url = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
-    try:
-        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        root = ET.fromstring(r.content)
-        items = [{"title": it.findtext("title", ""), "link": it.findtext("link", ""), "pub": it.findtext("pubDate", "")}
-                 for it in root.iter("item")]
-        return items[:6], ""
-    except Exception as e:
-        return [], str(e)[:150]
-
-
 # ---------------- Page ----------------
 def render_page():
     df, spot = fetch_option_chain(inst_key, expiry_date)
@@ -1828,29 +1813,10 @@ def render_page():
         ana["pressure_alert"] = pr["support_strike"] if (same and not pr.get("error") and pr.get("alert")) else None
         # ---- Table ----
         st.markdown("---")
-        st.markdown("---")
-        st.subheader("📰 Aaj ki market khabar")
-        news_items, news_err = fetch_news(f"{inst_name} stock market India")
-        if news_err:
-            st.caption(f"Khabar nahi mili: {news_err}")
-        elif not news_items:
-            st.caption("Abhi koi khabar nahi mili.")
-        for it in news_items:
-            st.markdown(f"- [{it['title']}]({it['link']})  \n<span style='font-size:11px;color:#6b7280'>{it['pub']}</span>",
-                        unsafe_allow_html=True)
-        if news_items and st.button("📰 Khabar ka saaraansh (AI)"):
-            news_summary = {"task": "Neeche di gayi market khabar ka chhota saaraansh Hinglish mein do.",
-                            "instrument": inst_name, "headlines": [i["title"] for i in news_items]}
-            with st.spinner("Khabar ka saaraansh ban raha hai..."):
-                text, err = ask_ai(json.dumps(news_summary, ensure_ascii=False))
-            st.session_state["ai_news"] = (inst_name, "warn" if err else "ok", err or text)
-        ai_news = st.session_state.get("ai_news")
-        if ai_news and ai_news[0] == inst_name:
-            (st.warning if ai_news[1] == "warn" else st.markdown)(ai_news[2])
-
         st.subheader("📋 Complete Option Chain Matrix")
+        st.caption("Shifting ka aadhar samay (isse pehle ka data 'purana')")
         sc1, sc2, sc3 = st.columns([2, 2, 1])
-        cutoff_t = sc1.time_input("Shifting ka aadhar samay (isse pehle ka data 'purana')", value=dt_time(9, 20), step=60)
+        cutoff_t = sc1.time_input("Samay", value=dt_time(9, 20), step=60, label_visibility="collapsed")
         if sc2.button(f"🔀 Shifting dekho ({cutoff_t:%H:%M} ke baad)"):
             with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
                 res = build_shift(df, spot, n_strikes, cutoff_t)
