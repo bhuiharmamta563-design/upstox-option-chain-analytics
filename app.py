@@ -1086,7 +1086,7 @@ function drawOI(){
     out.push('<rect x="' + f1(bx) + '" y="' + f1(ty - 11) + '" width="' + f1(w) + '" height="15" rx="4" fill="' + l.color + '"/>' +
              '<text x="' + f1(bx + w / 2) + '" y="' + f1(ty) + '" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">' + l.lab + '</text>');
   });
-  out.push('<text x="' + (L + pw / 2) + '" y="' + (H - 2) + '" font-size="10" fill="#9ca3af" text-anchor="middle">Strike  (laal = Call OI, hara = Put OI)</text>');
+  out.push('<text x="' + (L + pw / 2) + '" y="' + (H - 2) + '" font-size="10" fill="#9ca3af" text-anchor="middle">Strike  (laal = Call ' + D.mlab + ', hara = Put ' + D.mlab + ')</text>');
   svg.innerHTML = out.join('');
 }
 
@@ -1288,14 +1288,15 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
     }
 
 
-def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True):
+def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True, metric="oi"):
     d = df.sort_values("Strike").reset_index(drop=True)
     ai = int((d["Strike"] - spot).abs().idxmin())
     v = d.iloc[max(ai - n, 0): ai + n + 1].reset_index(drop=True)
     strikes = v["Strike"].astype(float).tolist()
     sstep = min([b - a for a, b in zip(strikes, strikes[1:])] or [50])
     atm = float(d.loc[ai, "Strike"])
-    ymax = max(float(v["Call OI"].max()), float(v["Put OI"].max()), 1.0) * 1.1
+    cc, pc_ = ("Call Vol", "Put Vol") if metric == "vol" else ("Call OI", "Put OI")
+    ymax = max(float(v[cc].max()), float(v[pc_].max()), 1.0) * 1.1
     zones = [
         {"key": it["key"], "short": it["short"], "a": it["level"], "b": it["level"], "color": it["color"], "alpha": it["alpha"]}
         for it in zone_items(ana, show_vol, show_oi)
@@ -1305,11 +1306,13 @@ def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True):
         for lab, val, col in level_lines(ana, spot)
     ]
     return {
-        "sig": "oi|" + sig, "n": len(strikes),
+        "sig": "oi|" + sig + "|" + metric, "n": len(strikes), "mlab": "Vol" if metric == "vol" else "OI",
         "s0": strikes[0], "sstep": sstep, "atm": strikes.index(atm) if atm in strikes else -1,
         "slabels": [str(fs(s)) for s in strikes],
-        "call": [float(x) for x in v["Call OI"]], "put": [float(x) for x in v["Put OI"]],
-        "tips": [f'{fs(r["Strike"])}  Call OI {r["Call OI"] / 1e5:.1f}L  Put OI {r["Put OI"] / 1e5:.1f}L' for _, r in v.iterrows()],
+        "call": [float(x) for x in v[cc]], "put": [float(x) for x in v[pc_]],
+        "tips": ([f'{fs(r["Strike"])}  Call Vol {fmt_vol(r["Call Vol"])}  Put Vol {fmt_vol(r["Put Vol"])}' for _, r in v.iterrows()]
+                 if metric == "vol" else
+                 [f'{fs(r["Strike"])}  Call OI {r["Call OI"] / 1e5:.1f}L  Put OI {r["Put OI"] / 1e5:.1f}L' for _, r in v.iterrows()]),
         "zones": zones, "lines": lines, "lo": 0.0, "hi": ymax, "defA": 0, "defB": len(strikes),
     }
 
@@ -1747,7 +1750,7 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
-    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones"], horizontal=True)
+    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones"], horizontal=True)
     if view.startswith("📈"):
         tf = st.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min")
         candles, src, err = fetch_candles(inst_key)
@@ -1787,8 +1790,12 @@ def render_charts(df, spot, ana, n_strikes, height=440):
                 st.info("Test ke liye candles ya zone kam hain.")
     else:
         components.html(zoom_shell_html("oi"), height=height, scrolling=True)
-        components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
-        st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
+        if view.startswith("📊 Volume"):
+            components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, True, False, "vol")}), height=0)
+            st.caption("Laal bar = Call Volume, Hara bar = Put Volume. Volume zones (SUP/DEM) chart par dikhte hain. LIQ = Liquidity strike.")
+        else:
+            components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
+            st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
 # ---------------- Page ----------------
