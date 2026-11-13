@@ -658,7 +658,7 @@ TABLE_CSS = """
       .pb.cy{color:#155e75;border-color:#22d3ee;background:#ecfeff;font-weight:700;}
       .sh{white-space:normal;font-size:11px;font-weight:600;letter-spacing:0;text-align:left;padding:5px 8px 3px 8px;line-height:1.55;color:#111;position:sticky;left:4px;width:min(360px,calc(100vw - 24px));box-sizing:border-box;}
       th.shmid{white-space:normal;font-size:10px;color:#6b7280;font-weight:700;}
-      tr.atm td{border-top:2px solid #3b82f6;border-bottom:2px solid #3b82f6;}
+
       tr.spotrow td{background:linear-gradient(90deg,#f97316,#ef4444,#f97316);color:#fff;font-weight:800;
                     padding:4px;font-size:12px;letter-spacing:1px;border:none;}
       .chip{display:inline-block;font-size:10px;font-weight:700;border-radius:10px;padding:1px 7px;margin:1px;}
