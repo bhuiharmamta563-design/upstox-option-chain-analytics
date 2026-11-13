@@ -244,7 +244,7 @@ def strength_label(score):
     return "Strong 💪" if score >= 70 else "Medium 👍" if score >= 45 else "Weak ⚠️"
 
 
-def analyze(df, spot, zone_pts=0.0):
+def analyze(df, spot, zone_pts=0.0, prev=None):
     d = df.sort_values("Strike").reset_index(drop=True).copy()
     diffs = np.diff(d["Strike"].astype(float).values)
     diffs = diffs[diffs > 0]
@@ -281,6 +281,11 @@ def analyze(df, spot, zone_pts=0.0):
             if pool.empty:
                 continue
             i1 = pool[col].idxmax()                                  # Zone 1: us taraf ka sabse zyada
+            kp = (prev or {}).get(f"{basis}_{side}")                 # HOLD: pichla zone tab tak rahe jab tak naya 15%+ zyada mazboot na ho
+            if kp is not None:
+                rp = pool[pool["Strike"] == kp]
+                if not rp.empty and float(rp[col].iloc[0]) >= 0.85 * float(pool[col].max()):
+                    i1 = rp.index[0]
             out = [make_zone(basis, side, 1, d.loc[i1])]
             k1, lim = float(d.loc[i1, "Strike"]), 10 * step
             if side == "supply":                                     # Zone 2: bahar ki taraf (upar), 10 strikes tak
@@ -995,10 +1000,10 @@ function drawPrice(){
   }
   if (sel >= 0 && sel < n) { var xs = X(sel); cl.push('<line x1="' + f1(xs) + '" x2="' + f1(xs) + '" y1="' + T + '" y2="' + (T + ph) + '" stroke="#2563eb" stroke-width="1" stroke-dasharray="3 3"/>'); }
   var zv = zl.filter(function(q){ return !(q[2] < T || q[1] > T + ph); });
-  var zy = zv.map(function(q){ var t = (q[2] - q[1]) >= 20 ? q[1] + 13 : q[1] - 4; return Math.min(Math.max(t, T + 12), T + ph - 4); });
+  var zy = zv.map(function(q){ var t = (q[2] - q[1]) >= 20 ? (q[0].side === 'demand' ? q[2] - 6 : q[1] + 13) : q[1] - 4; return Math.min(Math.max(t, T + 12), T + ph - 4); });
   zy = spread(zy, 13);
   zv.forEach(function(q, k){
-    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + q[0].color + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].label + '</text>');
+    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + (q[0].side === 'supply' ? '#b91c1c' : '#15803d') + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].label + '</text>');
   });
   D.lines.forEach(function(l){
     var y = Y(l.val);
@@ -1277,7 +1282,7 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
         "labels": [f"{r.time:{xfmt}}" for r in rows],
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
-        "zones": [{"label": i["label"], "short": i["short"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
+        "zones": [{"label": i["label"], "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
         "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
     }
@@ -1793,7 +1798,14 @@ def render_page():
     if df.empty:
         st.warning(f"⚠️ {inst_name} ka data load nahi hua! Upstox Access Token check karein. Stock ho to uske F&O options na hon ya symbol badal gaya ho to bhi data nahi aata.")
     else:
-        ana = analyze(df, spot, zone_pts)
+        zp_state = st.session_state.get("zone_prev") or {}
+        prev_z = zp_state.get("z") if (zp_state.get("inst") == inst_name and zp_state.get("exp") == expiry_date) else None
+        ana = analyze(df, spot, zone_pts, prev_z)
+        st.session_state["zone_prev"] = {
+            "inst": inst_name, "exp": expiry_date,
+            "z": {f"{b_}_{sd}": ana["zone_sets"][b_][sd][0]["strike"]
+                  for b_ in ("vol", "oi") for sd in ("supply", "demand") if ana["zone_sets"][b_][sd]},
+        }
         supply, demand = ana["supply"], ana["demand"]
 
         if focus_mode:
