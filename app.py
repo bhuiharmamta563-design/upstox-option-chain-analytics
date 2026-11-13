@@ -244,6 +244,9 @@ def strength_label(score):
     return "Strong 💪" if score >= 70 else "Medium 👍" if score >= 45 else "Weak ⚠️"
 
 
+NEAR_K = 5   # Zone 1 (Support/Resistance) spot ke sabse paas ke itne strikes mein se hi chuna jayega
+
+
 def analyze(df, spot, zone_pts=0.0, prev=None):
     d = df.sort_values("Strike").reset_index(drop=True).copy()
     diffs = np.diff(d["Strike"].astype(float).values)
@@ -280,11 +283,17 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
             pool = pool[pool[col] > 0]
             if pool.empty:
                 continue
-            i1 = pool[col].idxmax()                                  # Zone 1: us taraf ka sabse zyada
+            if side == "supply":
+                near = pool[pool["Strike"] <= spot + NEAR_K * step]     # spot ke paas wale strikes
+            else:
+                near = pool[pool["Strike"] >= spot - NEAR_K * step]
+            if near.empty:
+                near = pool
+            i1 = near[col].idxmax()                                  # Zone 1: market price ke paas ka sabse zyada
             kp = (prev or {}).get(f"{basis}_{side}")                 # HOLD: pichla zone tab tak rahe jab tak naya 15%+ zyada mazboot na ho
             if kp is not None:
-                rp = pool[pool["Strike"] == kp]
-                if not rp.empty and float(rp[col].iloc[0]) >= 0.85 * float(pool[col].max()):
+                rp = near[near["Strike"] == kp]
+                if not rp.empty and float(rp[col].iloc[0]) >= 0.85 * float(near[col].max()):
                     i1 = rp.index[0]
             out = [make_zone(basis, side, 1, d.loc[i1])]
             k1, lim = float(d.loc[i1, "Strike"]), 10 * step
