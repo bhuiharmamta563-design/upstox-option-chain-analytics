@@ -1377,13 +1377,12 @@ def ask_gemini(summary_text):
 
 
 def ask_ai(summary_text):
-    """Pehle free Gemini, key na ho to Claude."""
+    """Pehle free Gemini, phir Claude (jo key mili ho)."""
     if get_secret("GEMINI_API_KEY"):
         return ask_gemini(summary_text)
     if get_secret("ANTHROPIC_API_KEY"):
         return ask_claude(summary_text)
-    return None, ("Koi AI key nahi mila. Free ke liye GEMINI_API_KEY (aistudio.google.com) "
-                  "Streamlit Secrets ya .env mein add karein.")
+    return None, ("Koi AI key nahi mila. Secrets mein GEMINI_API_KEY ya ANTHROPIC_API_KEY daalein.")
 
 
 # ---------------- Shifting: option ki intraday history (button dabane par) ----------------
@@ -1435,8 +1434,9 @@ PRESS_COL = {("STRONG", "STRONG"): 1, ("STRONG", "DOWN"): 2, ("STRONG", "UP"): 3
              ("UP", "UP"): 7, ("DOWN", "UP"): 8, ("UP", "DOWN"): 9}
 
 
-def _win_metrics(view, hist):
-    """Har option ke liye 9:17-12:17 ka Volume, aakhri OI, aur kya OI badh raha hai (aur volume dusre half mein zyada)."""
+def _win_metrics(view, hist, end=None):
+    """Har option ke liye 9:17 se 'end' tak ka Volume, aakhri OI, aur kya OI badh raha hai (aur volume dusre half mein zyada)."""
+    end = end or PRESS_END
     rows = []
     for _, r in view.iterrows():
         for side, kc in (("Call", "Call Key"), ("Put", "Put Key")):
@@ -1444,7 +1444,7 @@ def _win_metrics(view, hist):
             if h is None or h.empty:
                 continue
             tm = h["time"].dt.time
-            w = h[(tm >= PRESS_START) & (tm <= PRESS_END)]
+            w = h[(tm >= PRESS_START) & (tm <= end)]
             if w.empty:
                 continue
             half = max(len(w) // 2, 1)
@@ -1485,6 +1485,62 @@ def _zone_state(m, side, zone_k, spot, kind):
     return "STRONG", None
 
 
+def _timeline(view, hist, end_t, side, cand_k, zone_k, kind, state, spot):
+    """Har minute par dekhta hai ki candidate strike ki shart poori hai ya nahi, aur us se intervals banata hai."""
+    if cand_k is None or state == "STRONG":
+        return None
+    key_col = "Call Key" if side == "Call" else "Put Key"
+    rows = []
+    for _, r in view.iterrows():
+        h = hist.get(r.get(key_col))
+        if h is None or h.empty:
+            continue
+        tm = h["time"].dt.time
+        w = h[(tm >= PRESS_START) & (tm <= end_t)]
+        if w.empty:
+            continue
+        w = w.assign(strike=float(r["Strike"]))
+        rows.append(w[["time", "strike", "vol", "oi"]])
+    if not rows:
+        return None
+    allw = pd.concat(rows)
+    pv = allw.pivot_table(index="time", columns="strike", values="vol", aggfunc="sum").fillna(0).sort_index().rolling(15, min_periods=1).sum()  # pichle 15 min ka volume (current pace)
+    po = allw.pivot_table(index="time", columns="strike", values="oi", aggfunc="last").sort_index().ffill().bfill()
+    if cand_k not in pv.columns or cand_k not in po.columns:
+        return None
+    sv = pv.div(pv.max(axis=1).replace(0, 1), axis=0) * 100
+    so = po.div(po.max(axis=1).replace(0, 1), axis=0) * 100
+    rising = po[cand_k] > po[cand_k].iloc[0]
+    if kind == "res":
+        outside = state == "UP"
+    else:
+        outside = state == "DOWN"
+    if outside:
+        cond = (sv[cand_k] >= 75) & (so[cand_k] >= 75) & rising
+    else:
+        cond = ((sv[cand_k] >= 75) | (so[cand_k] >= 75)) & rising
+    cond = cond.astype(bool)
+    intervals, start, prev = [], None, None
+    for t, ok in cond.items():
+        if ok and start is None:
+            start = t
+        if not ok and start is not None:
+            intervals.append((start, prev))
+            start = None
+        prev = t
+    if start is not None:
+        intervals.append((start, prev))
+    if not intervals:
+        return {"strike": cand_k, "text": f"{cand_k:g} par shart kabhi poori nahi hui"}
+    parts = [f"{a:%H:%M} se {b:%H:%M} tak poori"for a, b in intervals]
+    txt = f"{cand_k:g} par: " + ", ".join(parts)
+    if start is None and intervals and intervals[-1][1] != cond.index[-1]:
+        txt += f"; {intervals[-1][1]:%H:%M} ke baad 75% se neeche gaya"
+    elif start is not None:
+        txt += "; abhi tak chal rahi hai"
+    return {"strike": cand_k, "text": txt}
+
+
 def build_pressure_full(df, spot, n, ana):
     d = df.sort_values("Strike").reset_index(drop=True)
     ai = int((d["Strike"] - spot).abs().idxmin())
@@ -1501,19 +1557,25 @@ def build_pressure_full(df, spot, n, ana):
                 errs.append(e)
     if not hist:
         return {"error": "Option ki history nahi aayi. Upstox ka jawab: " + (errs[0] if errs else "khali")}
-    m = _win_metrics(view, hist)
+    end_t = max(h["time"].max() for h in hist.values()).time()
+    if end_t > dt_time(15, 30):
+        end_t = dt_time(15, 30)
+    m = _win_metrics(view, hist, end_t)
     if m.empty:
-        return {"error": f"{PRESS_START:%H:%M} se {PRESS_END:%H:%M} ka data abhi nahi hai. Market khulne ke baad dobara dabayein."}
+        return {"error": f"{PRESS_START:%H:%M} se ab tak ka data abhi nahi hai. Market khulne ke baad dobara dabayein."}
     sup_k = float(ana["demand"]["primary"]["strike"]) if ana.get("demand") else None
     res_k = float(ana["supply"]["primary"]["strike"]) if ana.get("supply") else None
     s_state, s_at = _zone_state(m, "Put", sup_k, spot, "sup")
     r_state, r_at = _zone_state(m, "Call", res_k, spot, "res")
+    s_tl = _timeline(view, hist, end_t, "Put", s_at, sup_k, "sup", s_state, spot)
+    r_tl = _timeline(view, hist, end_t, "Call", r_at, res_k, "res", r_state, spot)
     return {
-        "support": {"state": s_state, "zone": sup_k, "at": s_at},
-        "resistance": {"state": r_state, "zone": res_k, "at": r_at},
+        "support": {"state": s_state, "zone": sup_k, "at": s_at, "tl": s_tl},
+        "resistance": {"state": r_state, "zone": res_k, "at": r_at, "tl": r_tl},
         "column": PRESS_COL[(s_state, r_state)],
         "alert": s_state == "DOWN" and r_state == "DOWN",
         "support_strike": sup_k,
+        "end_label": end_t.strftime("%H:%M"),
         "n_ok": len(hist), "n_all": len(keys),
     }
 
@@ -1523,8 +1585,11 @@ def pressure_html(pr):
         if d["zone"] is None:
             return f"{name}: zone nahi mila"
         extra = f" (shift {fs(d['at'])} par)" if d["at"] else ""
-        return f"{name} <b>{fs(d['zone'])}</b> → {PRESS_LABEL[d['state']]}{extra}"
-    return (f"🧭 <b>Pressure matrix</b> ({PRESS_START:%H:%M}–{PRESS_END:%H:%M}) · Column <b>{pr['column']}</b><br>"
+        line = f"{name} <b>{fs(d['zone'])}</b> → {PRESS_LABEL[d['state']]}{extra}"
+        if d.get("tl"):
+            line += f"<br><span style='font-size:12px;color:#374151'>↳ {d['tl']['text']}</span>"
+        return line
+    return (f"🧭 <b>Pressure matrix</b> ({PRESS_START:%H:%M}–{pr.get('end_label', '')}) · Column <b>{pr['column']}</b><br>"
             f"{row('Support', pr['support'])}<br>{row('Resistance', pr['resistance'])}<br>"
             f"<span style='font-size:11px;color:#374151'>{pr['n_ok']}/{pr['n_all']} options ka data mila</span>")
 
@@ -1685,6 +1750,21 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
+@st.cache_data(ttl=600)
+def fetch_news(query):
+    """Google News ka RSS (bina key ke). Har 10 minute mein taaza."""
+    import xml.etree.ElementTree as ET
+    url = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
+    try:
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        root = ET.fromstring(r.content)
+        items = [{"title": it.findtext("title", ""), "link": it.findtext("link", ""), "pub": it.findtext("pubDate", "")}
+                 for it in root.iter("item")]
+        return items[:6], ""
+    except Exception as e:
+        return [], str(e)[:150]
+
+
 # ---------------- Page ----------------
 def render_page():
     df, spot = fetch_option_chain(inst_key, expiry_date)
@@ -1721,7 +1801,7 @@ def render_page():
         )
         st.write("")
 
-        if st.button("🧭 Pressure matrix dekho (9:17 se 3 ghante)"):
+        if st.button("🧭 Pressure matrix dekho (9:17 se ab tak)"):
             with st.spinner("Pressure nikal raha hoon (option ki history)..."):
                 st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
                                                 **build_pressure_full(df, spot, n_strikes, ana)}
@@ -1734,9 +1814,40 @@ def render_page():
                         unsafe_allow_html=True)
             if pr["alert"]:
                 st.error("⚠️ Support ke paas BEARISH pressure: support aur resistance dono ⬇ hain. Chart par support zone par alert dikhega.")
+        if st.button("🤖 AI summary (Gemini / Claude)"):
+            summary = {"instrument": inst_name, "spot": spot, "expiry": expiry_date, "bias": ana["bias"],
+                       "pcr": round(ana["pcr"], 2), "max_pain": ana["max_pain"], "zone_width_points": ana["zone_width"],
+                       "volume_zones": ana["zone_sets"]["vol"], "oi_zones": ana["zone_sets"]["oi"],
+                       "liquidity_strikes": ana["liq"]}
+            with st.spinner("AI analysis ho rahi hai..."):
+                text, err = ask_ai(json.dumps(summary, default=float))
+            st.session_state["ai_out"] = (inst_name, "warn" if err else "ok", err or text)
+        ai_out = st.session_state.get("ai_out")
+        if ai_out and ai_out[0] == inst_name:
+            (st.warning if ai_out[1] == "warn" else st.markdown)(ai_out[2])
         ana["pressure_alert"] = pr["support_strike"] if (same and not pr.get("error") and pr.get("alert")) else None
         # ---- Table ----
         st.markdown("---")
+        st.markdown("---")
+        st.subheader("📰 Aaj ki market khabar")
+        news_items, news_err = fetch_news(f"{inst_name} stock market India")
+        if news_err:
+            st.caption(f"Khabar nahi mili: {news_err}")
+        elif not news_items:
+            st.caption("Abhi koi khabar nahi mili.")
+        for it in news_items:
+            st.markdown(f"- [{it['title']}]({it['link']})  \n<span style='font-size:11px;color:#6b7280'>{it['pub']}</span>",
+                        unsafe_allow_html=True)
+        if news_items and st.button("📰 Khabar ka saaraansh (AI)"):
+            news_summary = {"task": "Neeche di gayi market khabar ka chhota saaraansh Hinglish mein do.",
+                            "instrument": inst_name, "headlines": [i["title"] for i in news_items]}
+            with st.spinner("Khabar ka saaraansh ban raha hai..."):
+                text, err = ask_ai(json.dumps(news_summary, ensure_ascii=False))
+            st.session_state["ai_news"] = (inst_name, "warn" if err else "ok", err or text)
+        ai_news = st.session_state.get("ai_news")
+        if ai_news and ai_news[0] == inst_name:
+            (st.warning if ai_news[1] == "warn" else st.markdown)(ai_news[2])
+
         st.subheader("📋 Complete Option Chain Matrix")
         sc1, sc2, sc3 = st.columns([2, 2, 1])
         cutoff_t = sc1.time_input("Shifting ka aadhar samay (isse pehle ka data 'purana')", value=dt_time(9, 20), step=60)
