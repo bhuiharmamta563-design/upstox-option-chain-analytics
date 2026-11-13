@@ -510,12 +510,15 @@ def shift_header_html(sh, side):
     return '<div class="sh">' + "<br>".join(lines) + "</div>"
 
 
-def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT", shift=None):
+def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT", shift=None, marks=None):
+    marks = marks or {}
     mx = {k: max(float(df[k].max()), 1.0) for k in ["Call OI", "Put OI", "Call Vol", "Put Vol"]}
     d = df.sort_values("Strike").reset_index(drop=True)
     atm_idx = int((d["Strike"] - spot).abs().idxmin())
     atm_strike = d.loc[atm_idx, "Strike"]
     view = d.iloc[max(atm_idx - n, 0): atm_idx + n + 1]
+    _mk_rows = d[d["Strike"].apply(lambda x: fs(x) in marks)]          # support/resistance strike hamesha dikhe
+    view = pd.concat([view, _mk_rows]).drop_duplicates(subset=["Strike"]).sort_values("Strike").reset_index(drop=True)
 
     # zone tags per strike
     tags = {}
@@ -544,7 +547,8 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
         cbg = ITM if s < spot else NORM
         pbg = ITM if s > spot else NORM
         is_atm = s == atm_strike
-        strike_bg = "#e5e7eb"                              # saare strike ek hi color
+        mk = marks.get(fs(s))
+        strike_bg = mk["bg"] if mk else "#e5e7eb"          # support/resistance strike ka rang, baaki ek hi color
 
         zone_td, pcr_td = "", ""
         if show_summary:
@@ -562,7 +566,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             + chg_cell(r["Call OI Chg"], cbg)
             + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
             + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
-            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px">{fs(s)}</td>'
+            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'
             # PUTS: Volume | OI | OI Chg | LTP | Zone | PCR | IV
             + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
             + bar_cell(f'{r["Put OI"] / 1e5:.1f}', r["Put OI"] / mx["Put OI"] * 100, pbg, "rgba(74,222,128,.6)", "to right", "green")
@@ -1744,9 +1748,26 @@ def current_shift():
     return None
 
 
+def zone_marks(ana):
+    """Option chain mein support / resistance strike. Pressure matrix chalaya ho to uska state bhi."""
+    m = {}
+    st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
+    pr = st.session_state.get("pressure") or {}
+    same = bool(pr) and pr.get("inst") == inst_name and pr.get("exp") == expiry_date and not pr.get("error")
+    if ana and ana.get("demand"):
+        k = fs(ana["demand"]["primary"]["strike"])
+        extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
+        m[k] = {"bg": "#bbf7d0", "fg": "#15803d", "txt": "🟢 SUPPORT" + extra}
+    if ana and ana.get("supply"):
+        k = fs(ana["supply"]["primary"]["strike"])
+        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
+        m[k] = {"bg": "#fecaca", "fg": "#b91c1c", "txt": "🔴 RESISTANCE" + extra}
+    return m
+
+
 def render_table(df, spot, n, ana, show_summary, label, height):
     components.html(table_shell_html(), height=height, scrolling=True)
-    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift())}), height=0)
+    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift(), zone_marks(ana))}), height=0)
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
