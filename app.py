@@ -114,7 +114,14 @@ PAGE_LIGHT = """<style>
 </style>"""
 theme_pick = st.sidebar.radio("Theme", ["🌙 Dark", "☀️ Light"], horizontal=True, index=0)
 st.session_state["theme_dark"] = theme_pick.startswith("🌙")
-st.markdown(PAGE_DARK if st.session_state["theme_dark"] else PAGE_LIGHT, unsafe_allow_html=True)
+SIDEBAR_FIX = """<style>
+[data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"],
+[data-testid="stSidebarHeader"] button, [data-testid="stSidebarHeader"] {
+  display: flex !important; visibility: visible !important; opacity: 1 !important; z-index: 999999 !important;
+}
+[data-testid="stHeader"] {display: flex !important; visibility: visible !important;}
+</style>"""
+st.markdown((PAGE_DARK if st.session_state["theme_dark"] else PAGE_LIGHT) + SIDEBAR_FIX, unsafe_allow_html=True)
 st.sidebar.header("Instrument")
 kind = st.sidebar.radio("Type", ["Index", "Stock"], horizontal=True)
 if kind == "Index":
@@ -662,7 +669,7 @@ TABLE_UPDATE_JS = """
 <script>
 window.__cid = 'table';
 var lastV = null, wrapEl = document.getElementById('wrap');
-var zs = 1, fitMode = true, pinch = null, pts = {};
+var zs = 1, fitMode = false, pinch = null, pts = {};
 function natW(t){ t.style.zoom = 1; return t.scrollWidth; }
 function applyZoom(){
   var t = wrapEl.querySelector('table'); if (!t) return;
@@ -685,8 +692,9 @@ function endPtr(e){ delete pts[e.pointerId]; if (Object.keys(pts).length < 2) pi
 wrapEl.addEventListener('pointerup', endPtr); wrapEl.addEventListener('pointercancel', endPtr);
 function dist(k){ var a = pts[k[0]], b = pts[k[1]]; return Math.hypot(a[0] - b[0], a[1] - b[1]); }
 window.addEventListener('resize', function(){ if (fitMode) applyZoom(); });
-document.addEventListener('fullscreenchange', function(){ setTimeout(applyZoom, 120); });
-document.addEventListener('webkitfullscreenchange', function(){ setTimeout(applyZoom, 120); });
+function onTableFS(){ fitMode = !!(document.fullscreenElement || document.webkitFullscreenElement); setTimeout(applyZoom, 120); }
+document.addEventListener('fullscreenchange', onTableFS);
+document.addEventListener('webkitfullscreenchange', onTableFS);
 window.__update = function(p){
   if (p.v === lastV) return;
   var first = (lastV === null); lastV = p.v;
