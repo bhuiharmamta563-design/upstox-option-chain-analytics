@@ -1751,7 +1751,9 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 
 def render_charts(df, spot, ana, n_strikes, height=440):
     view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones"], horizontal=True)
-    if view.startswith("📈"):
+    vol_mode = view.startswith("📊 Volume")
+    zv_flag, zo_flag = (True, False) if vol_mode else (show_vol_zones, show_oi_zones)
+    if view.startswith("📈") or vol_mode:
         tf = st.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min")
         candles, src, err = fetch_candles(inst_key)
         br = []
@@ -1768,13 +1770,13 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             )
             fake = pd.DataFrame({"time": [pd.Timestamp("2000-01-01")], "open": [spot], "high": [spot],
                                  "low": [spot], "close": [spot], "volume": [0]})
-            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", True, show_vol_zones, show_oi_zones)
+            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", True, zv_flag, zo_flag)
         else:
             if src == "intraday":
                 candles, xfmt = resample_candles(candles, tf), "%H:%M"
             else:
                 xfmt = "%d %b %H:%M"
-            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}", False, show_vol_zones, show_oi_zones, br)
+            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}|{vol_mode}", False, zv_flag, zo_flag, br)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
         if st.button("📊 Zone price test (aaj ke candles par)"):
@@ -1790,12 +1792,8 @@ def render_charts(df, spot, ana, n_strikes, height=440):
                 st.info("Test ke liye candles ya zone kam hain.")
     else:
         components.html(zoom_shell_html("oi"), height=height, scrolling=True)
-        if view.startswith("📊 Volume"):
-            components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, True, False, "vol")}), height=0)
-            st.caption("Laal bar = Call Volume, Hara bar = Put Volume. Volume zones (SUP/DEM) chart par dikhte hain. LIQ = Liquidity strike.")
-        else:
-            components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
-            st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
+        components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
+        st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
 
 
 # ---------------- Page ----------------
