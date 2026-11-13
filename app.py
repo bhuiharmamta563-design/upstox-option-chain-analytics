@@ -244,7 +244,7 @@ def strength_label(score):
     return "Strong 💪" if score >= 70 else "Medium 👍" if score >= 45 else "Weak ⚠️"
 
 
-NEAR_K = 3   # Zone 1 (Support/Resistance) spot ke sabse paas ke itne strikes mein se hi chuna jayega
+NEAR_K = 10  # Zone 1 (Support/Resistance) spot ke sabse paas ke itne strikes mein se hi chuna jayega
 
 
 def analyze(df, spot, zone_pts=0.0, prev=None):
@@ -283,10 +283,11 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
             pool = pool[pool[col] > 0]
             if pool.empty:
                 continue
-            if side == "supply":                                     # resistance: spot se UPAR, paas ke strikes
-                near = pool[(pool["Strike"] > spot) & (pool["Strike"] <= spot + NEAR_K * step)]
-            else:                                                    # support: spot se NEECHE, paas ke strikes
-                near = pool[(pool["Strike"] < spot) & (pool["Strike"] >= spot - NEAR_K * step)]
+            atm_k = float(d.loc[(d["Strike"] - spot).abs().idxmin(), "Strike"])   # ATM strike (spot ke sabse paas)
+            if side == "supply":                                     # resistance: ATM se upar 10 strike tak
+                near = pool[(pool["Strike"] >= atm_k) & (pool["Strike"] <= atm_k + NEAR_K * step)]
+            else:                                                    # support: ATM se neeche 10 strike tak
+                near = pool[(pool["Strike"] <= atm_k) & (pool["Strike"] >= atm_k - NEAR_K * step)]
             if near.empty:
                 near = pool
             i1 = near[col].idxmax()                                  # Zone 1: market price ke paas ka sabse zyada
