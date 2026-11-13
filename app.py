@@ -625,7 +625,8 @@ body:has(.dk){background:#0e1117;}
 TABLE_CSS = """
     <meta charset="utf-8"><style>
       body{margin:0;font-family:Arial,Helvetica,sans-serif;}
-      .wrap{overflow-x:auto;}
+      .wrap{overflow-x:auto;touch-action:pan-x pan-y;}
+      .zb{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;cursor:pointer;margin-right:6px;}
       .bar{display:flex;justify-content:flex-end;padding:4px 2px 6px 2px;}
       #fsbtn{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer;}
       #fsbtn:active{background:#1d4ed8;}
@@ -660,10 +661,34 @@ TABLE_UPDATE_JS = """
 <script>
 window.__cid = 'table';
 var lastV = null, wrapEl = document.getElementById('wrap');
+var zs = 1, fitMode = true, pinch = null, pts = {};
+function natW(t){ t.style.zoom = 1; return t.scrollWidth; }
+function applyZoom(){
+  var t = wrapEl.querySelector('table'); if (!t) return;
+  if (fitMode) { var nw = natW(t), av = wrapEl.clientWidth - 4; zs = nw > av && nw > 0 ? Math.max(0.35, av / nw) : 1; }
+  zs = Math.min(3, Math.max(0.35, zs));
+  t.style.zoom = zs;
+  var lab = document.getElementById('tfit'); if (lab) lab.textContent = fitMode ? '⤢ Fit ✓' : '⤢ Fit';
+}
+document.getElementById('tzo').addEventListener('click', function(){ fitMode = false; zs = Math.max(0.35, zs - 0.15); applyZoom(); });
+document.getElementById('tzi').addEventListener('click', function(){ fitMode = false; zs = Math.min(3, zs + 0.15); applyZoom(); });
+document.getElementById('tfit').addEventListener('click', function(){ fitMode = !fitMode; applyZoom(); });
+wrapEl.addEventListener('pointerdown', function(e){ pts[e.pointerId] = [e.clientX, e.clientY]; if (Object.keys(pts).length === 2) { var k = Object.keys(pts).map(Number); pinch = {d: dist(k), z: zs}; } });
+wrapEl.addEventListener('pointermove', function(e){
+  if (!pts[e.pointerId]) return; pts[e.pointerId] = [e.clientX, e.clientY];
+  if (pinch && Object.keys(pts).length >= 2) { var k = Object.keys(pts).map(Number), d = dist(k); if (pinch.d > 0) { fitMode = false; zs = Math.min(3, Math.max(0.35, pinch.z * d / pinch.d)); applyZoom(); } }
+});
+function endPtr(e){ delete pts[e.pointerId]; if (Object.keys(pts).length < 2) pinch = null; }
+wrapEl.addEventListener('pointerup', endPtr); wrapEl.addEventListener('pointercancel', endPtr);
+function dist(k){ var a = pts[k[0]], b = pts[k[1]]; return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+window.addEventListener('resize', function(){ if (fitMode) applyZoom(); });
+document.addEventListener('fullscreenchange', function(){ setTimeout(function(){ if (fitMode) applyZoom(); }, 120); });
+document.addEventListener('webkitfullscreenchange', function(){ setTimeout(function(){ if (fitMode) applyZoom(); }, 120); });
 window.__update = function(p){
   if (p.v === lastV) return;
   var first = (lastV === null); lastV = p.v;
   wrapEl.innerHTML = p.html;
+  applyZoom();
   if (first && window.__restoreScroll) window.__restoreScroll();
 };
 </script>"""
@@ -673,7 +698,7 @@ def table_shell_html():
     """Ye hissa kabhi badalta nahi, isliye refresh par iframe reload nahi hota (Full Screen bana rehta hai)."""
     return (
         DARK_CSS + TABLE_CSS
-        + '<div id="oc" class="' + _wc() + '"><div class="bar"><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
+        + '<div id="oc" class="' + _wc() + '"><div class="bar"><button class="zb" id="tzo">－</button><button class="zb" id="tzi">＋</button><button class="zb" id="tfit">⤢ Fit</button><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div>'
         + '<div class="wrap" id="wrap"><div style="padding:14px;color:#6b7280;font-size:13px;font-family:Arial">Option chain load ho raha hai…</div></div></div>'
         + FS_JS + SCROLL_JS + TABLE_UPDATE_JS
     )
