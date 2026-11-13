@@ -1789,13 +1789,15 @@ def render_page():
         supply, demand = ana["supply"], ana["demand"]
 
         if focus_mode:
+            st.markdown("<style>.block-container{padding-top:0.3rem !important;padding-bottom:0 !important;}.stApp h1,.stApp [data-testid=stCaptionContainer]{display:none !important;}</style>", unsafe_allow_html=True)
             st.caption(f"{inst_name} Spot {spot:,.2f} | Expiry {expiry_date} | PCR {ana['pcr']:.2f}")
-            render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(160 + (2 * n_strikes + 2) * 50, 2200))
+            render_table(df, spot, n_strikes, ana, show_summary, inst_name, 780)
             return
 
         if chart_focus:
+            st.markdown("<style>.block-container{padding-top:0.3rem !important;padding-bottom:0 !important;}.stApp h1,.stApp [data-testid=stCaptionContainer]{display:none !important;}</style>", unsafe_allow_html=True)
             st.caption(f"{inst_name} Spot {spot:,.2f} | Expiry {expiry_date} | Bias {ana['bias']}")
-            render_charts(df, spot, ana, n_strikes, height=640)
+            render_charts(df, spot, ana, n_strikes, height=780)
             return
 
         # ---- Smart Analysis ----
