@@ -276,7 +276,7 @@ def analyze(df, spot, zone_pts=0.0):
     for basis in ("vol", "oi"):
         for side in ("supply", "demand"):
             col = ("Call " if side == "supply" else "Put ") + ("Vol" if basis == "vol" else "OI")
-            pool = d[d["Strike"] >= spot] if side == "supply" else d[d["Strike"] <= spot]
+            pool = d[d["Strike"] >= spot - step] if side == "supply" else d[d["Strike"] <= spot + step]   # ek step ka buffer: spot ke chhote hilne par zone gayab nahi hota
             pool = pool[pool[col] > 0]
             if pool.empty:
                 continue
