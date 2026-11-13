@@ -632,7 +632,8 @@ TABLE_CSS = """
       #fsbtn:active{background:#1d4ed8;}
       #oc{background:#fff;}
       #oc:fullscreen{overflow:hidden;padding:6px;}
-      #oc:fullscreen .wrap{height:calc(100vh - 52px);overflow:auto;}
+      #oc:fullscreen .wrap{height:calc(100vh - 60px);overflow:auto;}
+      #oc:fullscreen table{width:100%;}
       #oc:-webkit-full-screen{overflow:hidden;padding:6px;}
       #oc:-webkit-full-screen .wrap{height:calc(100vh - 52px);overflow:auto;}
       table{width:100%;border-collapse:collapse;font-size:13px;text-align:center;}
@@ -668,6 +669,8 @@ function applyZoom(){
   if (fitMode) { var nw = natW(t), av = wrapEl.clientWidth - 4; zs = nw > av && nw > 0 ? Math.max(0.35, av / nw) : 1; }
   zs = Math.min(3, Math.max(0.35, zs));
   t.style.zoom = zs;
+  var fsNow = document.fullscreenElement || document.webkitFullscreenElement;
+  t.style.height = fsNow ? Math.floor(wrapEl.clientHeight / zs) + 'px' : '';
   var lab = document.getElementById('tfit'); if (lab) lab.textContent = fitMode ? '⤢ Fit ✓' : '⤢ Fit';
 }
 document.getElementById('tzo').addEventListener('click', function(){ fitMode = false; zs = Math.max(0.35, zs - 0.15); applyZoom(); });
@@ -682,8 +685,8 @@ function endPtr(e){ delete pts[e.pointerId]; if (Object.keys(pts).length < 2) pi
 wrapEl.addEventListener('pointerup', endPtr); wrapEl.addEventListener('pointercancel', endPtr);
 function dist(k){ var a = pts[k[0]], b = pts[k[1]]; return Math.hypot(a[0] - b[0], a[1] - b[1]); }
 window.addEventListener('resize', function(){ if (fitMode) applyZoom(); });
-document.addEventListener('fullscreenchange', function(){ setTimeout(function(){ if (fitMode) applyZoom(); }, 120); });
-document.addEventListener('webkitfullscreenchange', function(){ setTimeout(function(){ if (fitMode) applyZoom(); }, 120); });
+document.addEventListener('fullscreenchange', function(){ setTimeout(applyZoom, 120); });
+document.addEventListener('webkitfullscreenchange', function(){ setTimeout(applyZoom, 120); });
 window.__update = function(p){
   if (p.v === lastV) return;
   var first = (lastV === null); lastV = p.v;
