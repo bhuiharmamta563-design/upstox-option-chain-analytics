@@ -103,6 +103,8 @@ PAGE_LIGHT = """<style>
 [data-testid=stSelectbox] svg, [data-testid=stTimeInput] svg {fill:#111111 !important;}
 [data-testid=stNumberInput] button, [data-testid=stNumberInput] button div {background:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
 [data-testid=stNumberInput] button svg {fill:#111111 !important;color:#111111 !important;}
+[data-testid=stTextInput] input, [data-testid=stTextInput] [data-baseweb=base-input], [data-testid=stTextInput] [data-baseweb=base-input] div {background:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
+[data-testid=stTextInput] input::placeholder {color:#6b7280 !important;}
 [data-testid=stHeader], [data-testid=stToolbar] {background:#ffffff !important;}
 [data-testid=stToolbar] *, [data-testid=stHeader] * {color:#111111 !important;}
 [data-testid=stToolbar] svg, [data-testid=stHeader] svg {fill:#111111 !important;stroke:#111111 !important;}
