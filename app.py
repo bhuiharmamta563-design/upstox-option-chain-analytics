@@ -539,7 +539,7 @@ def shift_header_html(sh, side):
     return '<div class="sh">' + "<br>".join(lines) + "</div>"
 
 
-def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT", shift=None, marks=None):
+def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT", shift=None, marks=None, vm_txt=None):
     marks = marks or {}
     mx = {k: max(float(df[k].max()), 1.0) for k in ["Call OI", "Put OI", "Call Vol", "Put Vol"]}
     d = df.sort_values("Strike").reset_index(drop=True)
@@ -566,7 +566,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
     ncols = 13 if show_summary else 11
     rows, spot_done = [], False
     spot_row = (
-        f'<tr class="spotrow"><td colspan="{ncols}">▶▶ {inst_label} SPOT {spot:,.2f} (market yahan chal raha hai) ◀◀</td></tr>'
+        f'<tr class="spotrow"><td colspan="{ncols}">▶▶ {inst_label} SPOT {spot:,.2f}' + (f' · {vm_txt}' if vm_txt else '') + ' (market yahan chal raha hai) ◀◀</td></tr>'
     )
     for _, r in view.iterrows():
         s = r["Strike"]
@@ -1806,9 +1806,10 @@ def zone_test_table_html(rows):
 
 
 # ---------------- Volume matrix (Volume + Zone wale notes ke hisaab se, sirf Volume, koi OI nahi) ----------------
-VM_MAP = {("↑", "↔"): ("Bullish", 1), ("↓", "↔"): ("Bearish", 2), ("↔", "↔"): ("Consolidated", 3),
-          ("↑", "↑"): ("Sideways (—)", 4), ("↓", "↑"): ("Bearish", 5), ("↔", "↑"): ("Bearish", 6),
-          ("↔", "↓"): ("Bullish", 7), ("↑", "↓"): ("Bullish", 8), ("↓", "↓"): ("Consolidated", 9)}
+WTT, WTB = "Weak towards top (WTT)", "Weak towards bottom (WTB)"
+VM_MAP = {("↑", "↔"): (WTT, 1), ("↓", "↔"): (WTB, 2), ("↔", "↔"): ("Consolidated", 3),
+          ("↑", "↑"): ("Sideways (—)", 4), ("↓", "↑"): (WTB, 5), ("↔", "↑"): (WTB, 6),
+          ("↔", "↓"): (WTT, 7), ("↑", "↓"): (WTT, 8), ("↓", "↓"): ("Consolidated", 9)}
 
 
 def _vol_trend(view, hist, side, k, end_t):
@@ -1932,10 +1933,12 @@ def current_shift():
 
 def zone_marks(ana, df, spot):
     """Option chain ke rang / labels:
-    - SUPPORT / RESISTANCE = Volume zone 1 (hamesha).
-    - SUPPORT 2 / RESISTANCE 2 (75% se upar wale strike):
-        * ATM ki taraf (zone 1 aur ATM ke beech): Volume ya OI, dono mein se EK 75% se upar ho to dikhe.
-        * ATM se door (zone 1 se aage, OTM): Volume AUR OI DONO 75% se upar hon tabhi dikhe.
+    - SUPPORT / RESISTANCE = Volume zone 1 (hamesha, bina tag ke).
+    - SUPPORT 2, 3 ... / RESISTANCE 2, 3 ... = zone 1 se paas wale strike se numbering, aur tag:
+        Support, market ke neeche (door):   Volume AUR OI dono >=75%  -> WTB
+        Support, market ke paas (ATM ki taraf): Volume YA OI mein se ek >=75% -> WTT
+        Resistance, market ke paas (ATM ki taraf): ek >=75%          -> WTB
+        Resistance, market se door:         dono >=75%               -> WTT
     Pressure matrix chalaya ho to zone 1 ke label mein uska state bhi."""
     m = {}
     st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
@@ -1956,41 +1959,47 @@ def zone_marks(ana, df, spot):
         return (max(pv, po) >= 75) if inner else (pv >= 75 and po >= 75)
 
     if vs.get("demand"):
-        z1 = vs["demand"][0]
-        s1 = float(z1["primary"]["strike"])
+        s1 = float(vs["demand"][0]["primary"]["strike"])
         extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
         m[fs(s1)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT" + extra}
+        cands = []
         for _, r in d.iterrows():
             k = float(r["Strike"])
             if k == s1 or k > atm:
                 continue
-            if k > s1 and k <= atm:                      # zone 1 aur ATM ke beech (ATM ki taraf)
+            if k > s1:                                    # zone 1 aur ATM ke beech (ATM ki taraf)
                 if ok_2(r, "Put", True):
-                    m[fs(k)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT 2"}
-            elif k < s1:                                 # zone 1 se aage (OTM)
+                    cands.append((abs(k - s1), k, "WTT"))
+            else:                                         # zone 1 se neeche (door)
                 if ok_2(r, "Put", False):
-                    m[fs(k)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT 2"}
+                    cands.append((abs(k - s1), k, "WTB"))
+        for idx, (_, k, tag) in enumerate(sorted(cands)):
+            m[fs(k)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": f"🟢 SUPPORT {idx + 2} · {tag}"}
     if vs.get("supply"):
-        r1z = vs["supply"][0]
-        r1 = float(r1z["primary"]["strike"])
+        r1 = float(vs["supply"][0]["primary"]["strike"])
         extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
         m[fs(r1)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE" + extra}
+        cands = []
         for _, r in d.iterrows():
             k = float(r["Strike"])
             if k == r1 or k < atm:
                 continue
-            if atm <= k < r1:                            # ATM aur zone 1 ke beech (ATM ki taraf)
+            if k < r1:                                    # ATM aur zone 1 ke beech (ATM ki taraf)
                 if ok_2(r, "Call", True):
-                    m[fs(k)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE 2"}
-            elif k > r1:                                 # zone 1 se aage (OTM)
+                    cands.append((abs(k - r1), k, "WTB"))
+            else:                                         # zone 1 se aage (door)
                 if ok_2(r, "Call", False):
-                    m[fs(k)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE 2"}
+                    cands.append((abs(k - r1), k, "WTT"))
+        for idx, (_, k, tag) in enumerate(sorted(cands)):
+            m[fs(k)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": f"🔴 RESISTANCE {idx + 2} · {tag}"}
     return m
 
 
 def render_table(df, spot, n, ana, show_summary, label, height):
     components.html(table_shell_html(), height=height, scrolling=True)
-    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift(), zone_marks(ana, df, spot))}), height=0)
+    vm = st.session_state.get("vmatrix") or {}
+    vm_txt = vm.get("label") if (vm and vm.get("inst") == inst_name and vm.get("exp") == expiry_date and not vm.get("error")) else None
+    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift(), zone_marks(ana, df, spot), vm_txt)}), height=0)
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
