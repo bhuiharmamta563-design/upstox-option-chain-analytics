@@ -633,6 +633,7 @@ def _wc():
 
 DARK_CSS = """<style>
 .dk{--fg:#e5e7eb;}
+.dk .top, .dk .bar{background:#0e1117;}
 body:has(.dk){background:#0e1117;}
 #oc.dk{background:#0e1117;}
 .dk td[style*="background-color:#c4b5fd"]{background-color:#4c1d95 !important;color:#ede9fe !important;}
@@ -662,7 +663,7 @@ TABLE_CSS = """
       body{margin:0;font-family:Arial,Helvetica,sans-serif;}
       .wrap{overflow-x:auto;touch-action:pan-x pan-y;}
       .zb{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;cursor:pointer;margin-right:6px;}
-      .bar{display:flex;justify-content:flex-end;padding:4px 2px 6px 2px;}
+      .bar{display:flex;justify-content:flex-end;padding:4px 2px 6px 2px;position:sticky;top:0;z-index:20;background:#fff;}
       #fsbtn{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer;}
       #fsbtn:active{background:#1d4ed8;}
       #oc{background:#fff;}
@@ -1280,7 +1281,7 @@ def zoom_shell_html(kind):
     css = (
         "<meta charset=\"utf-8\"><style>body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fff}"
         ".sc{overflow-x:auto;padding:0 2px}"
-        ".top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:6px;padding:6px 8px 0 8px}"
+        ".top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:6px;padding:6px 8px 0 8px;position:sticky;top:0;z-index:20;background:#fff}"
         ".btns{display:flex;flex-wrap:wrap;gap:5px}"
         ".btns button{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:13px;font-weight:700;cursor:pointer}"
         ".btns button.g{background:#475569;padding:6px 10px}"
