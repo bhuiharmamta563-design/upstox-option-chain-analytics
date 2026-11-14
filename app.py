@@ -415,6 +415,12 @@ SCROLL_JS = """
 </script>"""
 
 
+def pct_s(x):
+    """100 -> '100%', 75.1 -> '75.1%', 94.0 -> '94%' (poora number bina decimal ke)."""
+    v = round(float(x), 1)
+    return (str(int(v)) + "%") if v == int(v) else ("%.1f" % v + "%")
+
+
 def fmt_vol(v):
     v = v or 0
     if v >= 10000000:
@@ -433,23 +439,23 @@ def bar_cell(text, pct, bg, color, direction, top_cls):
     if pct >= 99.5:                                  # sabse zyada OI / Volume (badge '100%' ke barabar)
         return (
             f'<td style="background-color:{HI_COLOR};color:#fff">'
-            f'<div class="v">{text}</div><div class="pb hi">{pct:.0f}%</div></td>'
+            f'<div class="v">{text}</div><div class="pb hi">{pct_s(pct)}</div></td>'
         )
     if pct >= 74.5:                                  # 75% se upar: saaf ek rang (bina bar ke)
         return (
             f'<td style="background-color:{MID_COLOR}">'
-            f'<div class="v">{text}</div><div class="pb mid">{pct:.0f}%</div></td>'
+            f'<div class="v">{text}</div><div class="pb mid">{pct_s(pct)}</div></td>'
         )
     if pct >= 59.5:                                  # 60% se upar (Zone 2 ke layak)
         return (
             f'<td style="background-color:{CYAN_COLOR}">'
-            f'<div class="v">{text}</div><div class="pb cy">{pct:.0f}%</div></td>'
+            f'<div class="v">{text}</div><div class="pb cy">{pct_s(pct)}</div></td>'
         )
     cls = "pb"
-    grad = f"linear-gradient({direction}, {color} {pct:.0f}%, transparent {pct:.0f}%)"
+    grad = f"linear-gradient({direction}, {color} {pct_s(pct)}, transparent {pct_s(pct)})"
     return (
         f'<td style="background-color:{bg};background-image:{grad}">'
-        f'<div class="v">{text}</div><div class="{cls}">{pct:.0f}%</div></td>'
+        f'<div class="v">{text}</div><div class="{cls}">{pct_s(pct)}</div></td>'
     )
 
 
@@ -877,18 +883,18 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
         pct_parts = []
         for m in sorted(g["members"], key=lambda m: (m["basis"] != "vol", m["rank"])):
             tg = "Vol" if m["basis"] == "vol" else "OI"
-            pct_parts.append(f"{tg} {m['pct']:.0f}%")
+            pct_parts.append(f"{tg} {pct_s(m['pct'])}")
             sec = (ana or {}).get("second", {}).get((m["basis"], g["side"]))
             if sec and sec["strike"] != fs(float(m["strike"])):
-                pct_parts.append(f"2nd {tg} {sec['strike']:g} {sec['pct']:.0f}%")
+                pct_parts.append(f"2nd {tg} {sec['strike']:g} {pct_s(sec['pct'])}")
         pct_txt = " · ".join(pct_parts)
         nm = zone_name(g, tag=False)
         prim = next((m for m in g["members"] if m["basis"] == "vol"), None) or min(g["members"], key=lambda m: m["rank"])
         sec = (ana or {}).get("second", {}).get((prim["basis"], g["side"]))
-        prim_pct = f"{prim['pct']:.0f}%"
+        prim_pct = f"{pct_s(prim['pct'])}"
         sec_part = ""
         if sec and sec["strike"] != fs(float(prim["strike"])):
-            sec_part = f" · 2nd {sec['strike']:g} {sec['pct']:.0f}%"
+            sec_part = f" · 2nd {sec['strike']:g} {pct_s(sec['pct'])}"
         pct_txt = prim_pct + sec_part
         flags = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}"
         label = flags + f"{nm} · {pct_txt}"
@@ -901,6 +907,7 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
             label = "⚠️ BEARISH PRESSURE · " + label
             main_label = "⚠️ BEARISH PRESSURE · " + main_label
         items.append({"label": label, "main": main_label, "sec": sec_part, "seccol": sec_col, "short": short,
+                      "shortp": f"{short} · {prim_pct}{sec_part}",
                       "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
                       "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True, "broke": broke})
     return items
@@ -1359,7 +1366,7 @@ def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True, metric=
     cc, pc_ = ("Call Vol", "Put Vol") if metric == "vol" else ("Call OI", "Put OI")
     ymax = max(float(v[cc].max()), float(v[pc_].max()), 1.0) * 1.1
     zones = [
-        {"key": it["key"], "short": it["short"], "a": it["level"], "b": it["level"], "color": it["color"], "alpha": it["alpha"]}
+        {"key": it["key"], "short": it.get("shortp", it["short"]), "a": it["level"], "b": it["level"], "color": it["color"], "alpha": it["alpha"]}
         for it in zone_items(ana, show_vol, show_oi)
     ]
     lines = [
@@ -1732,7 +1739,7 @@ def pressure_html(pr):
             return f"{name}: zone nahi mila"
         strong = "मज़बूत" if d.get("share", 0) >= 60 else "कमज़ोर"
         return (f"{name} <b>{fs(d['zone'])}</b> → {TREND_TXT[d['state']]} · {strong} "
-                f"({d.get('share', 0):.0f}%)")
+                f"({pct_s(d.get('share', 0))})")
     return (f"🧭 <b>Pressure matrix</b> (Volume) · {PRESS_START:%H:%M}–{pr.get('end_label', '')} · "
             f"Column <b>{pr['column']}</b> · <b>{pr['result']}</b><br>"
             f"{row('Support', pr['support'])}<br>{row('Resistance', pr['resistance'])}<br>"
@@ -1832,7 +1839,7 @@ def _vol_trend(view, hist, side, k, end_t):
         arrow = "↓"
     else:
         arrow = "↔"
-    return arrow, f"{fs(k)} par volume share {sa:.0f}% → {sb:.0f}%"
+    return arrow, f"{fs(k)} par volume share {pct_s(sa)} → {pct_s(sb)}"
 
 
 def build_volume_matrix(df, spot, n, ana):
@@ -2155,7 +2162,7 @@ def render_page():
                 html += (
                     f'{"💧 " if z["rank"] == 2 else ""}<b>Zone {z["rank"]}:</b> '
                     f'<span style="font-size:18px;font-weight:800">{fs(z["low"])} – {fs(z["high"])}</span> '
-                    f'(strike {p["strike"]}, {z["pct"]:.0f}%)<br>'
+                    f'(strike {p["strike"]}, {pct_s(z["pct"])})<br>'
                     f'📏 {zone_size_txt(z)} • Spot se {zone_dist_txt(z, side)}<br>'
                     f'OI {p["oi"] / 1e5:.1f}L • Chg {p["chg"] / 1e5:+.1f}L • Vol {fmt_vol(p["vol"])}<br>'
                     + ('⭐ OI aur Volume dono ka zone yahin<br>' if both else '')
