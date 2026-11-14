@@ -2078,7 +2078,11 @@ def render_page():
         )
         st.write("")
 
-        if st.button("🧭 Pressure matrix dekho (9:17 se ab tak)"):
+        bc1, bc2, bc3 = st.columns(3)
+        pr_click = bc1.button("🧭 Pressure matrix (9:17 se ab tak)")
+        vm_click = bc2.button("📋 Volume matrix (9:17 se ab tak)")
+        ai_click = bc3.button("🤖 AI summary (Gemini / Claude)")
+        if pr_click:
             with st.spinner("Pressure nikal raha hoon (option ki history)..."):
                 st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
                                                 **build_pressure_full(df, spot, n_strikes, ana)}
@@ -2091,7 +2095,7 @@ def render_page():
                         unsafe_allow_html=True)
             if pr["alert"]:
                 st.error("⚠️ Pressure result BEARISH hai. Chart par support zone par alert dikhega.")
-        if st.button("📋 Volume matrix dekho (9:17 se ab tak)"):
+        if vm_click:
             with st.spinner("Volume trend nikal raha hoon..."):
                 st.session_state["vmatrix"] = {"inst": inst_name, "exp": expiry_date,
                                                **build_volume_matrix(df, spot, n_strikes, ana)}
@@ -2102,7 +2106,7 @@ def render_page():
             else:
                 st.markdown(f'<div style="background:#ecfdf5;color:#111;padding:10px;border-radius:8px">{volume_matrix_html(vm)}</div>',
                             unsafe_allow_html=True)
-        if st.button("🤖 AI summary (Gemini / Claude)"):
+        if ai_click:
             summary = {"instrument": inst_name, "spot": spot, "expiry": expiry_date, "bias": ana["bias"],
                        "pcr": round(ana["pcr"], 2), "max_pain": ana["max_pain"], "zone_width_points": ana["zone_width"],
                        "volume_zones": ana["zone_sets"]["vol"], "oi_zones": ana["zone_sets"]["oi"],
