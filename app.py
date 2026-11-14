@@ -1932,13 +1932,11 @@ def current_shift():
 
 
 def zone_marks(ana, df, spot):
-    """Option chain ke rang / labels:
-    - SUPPORT / RESISTANCE = Volume zone 1 (hamesha, bina tag ke).
-    - SUPPORT 2, 3 ... / RESISTANCE 2, 3 ... = zone 1 se paas wale strike se numbering, aur tag:
-        Support, market ke neeche (door):   Volume AUR OI dono >=75%  -> WTB
-        Support, market ke paas (ATM ki taraf): Volume YA OI mein se ek >=75% -> WTT
-        Resistance, market ke paas (ATM ki taraf): ek >=75%          -> WTB
-        Resistance, market se door:         dono >=75%               -> WTT
+    """Option chain ke labels (short form):
+    - Zone 1 hamesha qualify karta hai: support = 'S - WTT', resistance = 'R - WTB'.
+    - Baaki strike rules se: market ke paas (ATM ki taraf) ek bhi 75%+ -> tag; market se door dono 75%+ -> tag.
+        Support: paas -> WTT, door -> WTB.   Resistance: paas -> WTB, door -> WTT.
+    - Ek side par sirf ek label ho to 'S - WTT' / 'R - WTB'; ek se zyada ho to 'S1 - WTT', 'S2 - WTB' ... (market price ke paas se).
     Pressure matrix chalaya ho to zone 1 ke label mein uska state bhi."""
     m = {}
     st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
@@ -1958,40 +1956,44 @@ def zone_marks(ana, df, spot):
         pv, po = pcts(row, side)
         return (max(pv, po) >= 75) if inner else (pv >= 75 and po >= 75)
 
+    def numbered(entries, letter, color, extra_zone1):
+        entries = sorted(entries, key=lambda e: e[0])          # market price ke paas se
+        for i, (_, k, tag, is_z1) in enumerate(entries):
+            name = letter if len(entries) == 1 else f"{letter}{i + 1}"
+            ex = extra_zone1 if is_z1 else ""
+            m[fs(k)] = {"bg": color[0], "fg": "#ffffff", "numfg": "#ffffff", "txt": f"{color[1]} {name} - {tag}{ex}"}
+
     if vs.get("demand"):
         s1 = float(vs["demand"][0]["primary"]["strike"])
-        extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
-        m[fs(s1)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT" + extra}
-        cands = []
+        entries = [(abs(s1 - atm), s1, "WTT", True)]          # zone 1 (support)
         for _, r in d.iterrows():
             k = float(r["Strike"])
             if k == s1 or k > atm:
                 continue
-            if k > s1:                                    # zone 1 aur ATM ke beech (ATM ki taraf)
+            if k > s1:                                        # zone 1 aur ATM ke beech (paas)
                 if ok_2(r, "Put", True):
-                    cands.append((abs(k - s1), k, "WTT"))
-            else:                                         # zone 1 se neeche (door)
+                    entries.append((abs(k - atm), k, "WTT", False))
+            else:                                             # zone 1 se neeche (door)
                 if ok_2(r, "Put", False):
-                    cands.append((abs(k - s1), k, "WTB"))
-        for idx, (_, k, tag) in enumerate(sorted(cands)):
-            m[fs(k)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": f"🟢 SUPPORT {idx + 2} · {tag}"}
+                    entries.append((abs(k - atm), k, "WTB", False))
+        extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
+        numbered(entries, "S", ("#15803d", "🟢"), extra)
+
     if vs.get("supply"):
         r1 = float(vs["supply"][0]["primary"]["strike"])
-        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
-        m[fs(r1)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE" + extra}
-        cands = []
+        entries = [(abs(r1 - atm), r1, "WTB", True)]          # zone 1 (resistance)
         for _, r in d.iterrows():
             k = float(r["Strike"])
             if k == r1 or k < atm:
                 continue
-            if k < r1:                                    # ATM aur zone 1 ke beech (ATM ki taraf)
+            if k < r1:                                        # ATM aur zone 1 ke beech (paas)
                 if ok_2(r, "Call", True):
-                    cands.append((abs(k - r1), k, "WTB"))
-            else:                                         # zone 1 se aage (door)
+                    entries.append((abs(k - atm), k, "WTB", False))
+            else:                                             # zone 1 se aage (door)
                 if ok_2(r, "Call", False):
-                    cands.append((abs(k - r1), k, "WTT"))
-        for idx, (_, k, tag) in enumerate(sorted(cands)):
-            m[fs(k)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": f"🔴 RESISTANCE {idx + 2} · {tag}"}
+                    entries.append((abs(k - atm), k, "WTT", False))
+        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
+        numbered(entries, "R", ("#b91c1c", "🔴"), extra)
     return m
 
 
