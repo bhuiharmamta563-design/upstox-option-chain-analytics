@@ -302,9 +302,9 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
                 cand = pool[(pool["Strike"] > k1) & (pool["Strike"] <= k1 + lim)]
             else:                                                    # Demand: bahar ki taraf (niche)
                 cand = pool[(pool["Strike"] < k1) & (pool["Strike"] >= k1 - lim)]
-            cand = cand[cand[col] >= 0.6 * colmax[col]]              # 60% ya usse upar
-            if not cand.empty:
-                out.append(make_zone(basis, side, 2, d.loc[cand[col].idxmax()]))
+            cand = cand[cand[col] >= 0.6 * colmax[col]]              # 60% ya usse upar: sab zone bante hain
+            for rk, ix in enumerate(cand.sort_values(col, ascending=False).index, start=2):
+                out.append(make_zone(basis, side, rk, d.loc[ix]))
             zone_sets[basis][side] = out
     zones_flat = [z for b_ in ("oi", "vol") for sd in ("supply", "demand") for z in zone_sets[b_][sd]]
     supply = (zone_sets["oi"]["supply"] or zone_sets["vol"]["supply"] or [None])[0]    # bias ke liye (OI zone 1)
@@ -787,6 +787,15 @@ def zone_groups(ana, show_vol=True, show_oi=True):
     return groups
 
 
+def zone_name(g):
+    """Chart label: SUPPLY 1 / SUPPLY 2 / DEMAND 1 / DEMAND 2, aur basis (Vol / OI)."""
+    side = "SUPPLY" if g["side"] == "supply" else "DEMAND"
+    num = str(min(m["rank"] for m in g["members"]))
+    bases = {m["basis"] for m in g["members"]}
+    tag = " (Vol+OI)" if len(bases) > 1 else (" (Vol)" if "vol" in bases else " (OI)")
+    return f"{side} {num}{tag}"
+
+
 def group_tag(g):
     parts = [("V" if m["basis"] == "vol" else "O") + str(m["rank"])
              for m in sorted(g["members"], key=lambda m: (m["basis"] != "vol", m["rank"]))]
@@ -849,7 +858,9 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None):
         color = ("#ef4444" if has_oi else "#9f1239") if sup else ("#16a34a" if has_oi else "#4d7c0f")
         alpha = 0.26 if both else 0.18 if any(m["rank"] == 1 for m in g["members"]) else 0.10
         broke = bool(breached) and any(abs(float(b["low"]) - float(g["low"])) < 1e-6 and b["side"] == g["side"] for b in breached)
-        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{short} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p)"
+        pct_txt = " · ".join(f"{'Vol' if m['basis'] == 'vol' else 'OI'} {m['pct']:.0f}%"
+                             for m in sorted(g["members"], key=lambda m: (m["basis"] != "vol", m["rank"])))
+        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{zone_name(g)} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p) · {pct_txt}"
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
         pa = (ana or {}).get("pressure_alert")
@@ -1599,10 +1610,55 @@ def _timeline(view, hist, end_t, side, cand_k, zone_k, kind, state, spot):
     return {"strike": cand_k, "text": txt}
 
 
+# Notes ke hisaab se: Resistance aur Support ka trend (volume %, pichle 30 min se) -> 9 column
+PRESS_MATRIX = {
+    ("UP", "FLAT"): (1, "Bullish"), ("DOWN", "FLAT"): (2, "Bearish"), ("FLAT", "FLAT"): (3, "Consolidated"),
+    ("UP", "UP"): (4, "Sideways (saaf nahi)"), ("DOWN", "UP"): (5, "Bearish"), ("FLAT", "UP"): (6, "Bearish"),
+    ("FLAT", "DOWN"): (7, "Bullish"), ("UP", "DOWN"): (8, "Bullish"), ("DOWN", "DOWN"): (9, "Consolidated"),
+}
+TREND_TXT = {"UP": "⬆ badh raha", "DOWN": "⬇ ghat raha", "FLAT": "↔ stable"}
+
+
+def _vol_trend(view, hist, end_t, side, k):
+    """Us side ke sab strike ka 15-min rolling volume; k ka share (max ke % mein) ab vs 30 min pehle."""
+    key_col = "Call Key" if side == "Call" else "Put Key"
+    rows = []
+    for _, r in view.iterrows():
+        h = hist.get(r.get(key_col))
+        if h is None or h.empty:
+            continue
+        tm = h["time"].dt.time
+        w = h[(tm >= PRESS_START) & (tm <= end_t)]
+        if w.empty:
+            continue
+        rows.append(w.assign(strike=float(r["Strike"]))[["time", "strike", "vol"]])
+    if not rows:
+        return None
+    allw = pd.concat(rows)
+    pv = allw.pivot_table(index="time", columns="strike", values="vol", aggfunc="sum").fillna(0).sort_index()
+    if float(k) not in pv.columns:
+        return None
+    roll = pv.rolling(15, min_periods=1).sum()
+    share = roll.div(roll.max(axis=1).replace(0, 1), axis=0) * 100
+    series = share[float(k)]
+    now = float(series.iloc[-1])
+    past = series[series.index <= series.index[-1] - pd.Timedelta(minutes=30)]
+    before = float(past.iloc[-1]) if len(past) else float(series.iloc[0])
+    diff = now - before
+    trend = "UP" if diff > 5 else "DOWN" if diff < -5 else "FLAT"
+    return {"strike": float(k), "share": now, "trend": trend, "diff": diff}
+
+
 def build_pressure_full(df, spot, n, ana):
+    vs = ana.get("zone_sets", {}).get("vol", {})
+    if not vs.get("supply") or not vs.get("demand"):
+        return {"error": "Volume zone nahi mila, pressure nahi nikal sakta."}
+    res_k = float(vs["supply"][0]["primary"]["strike"])
+    sup_k = float(vs["demand"][0]["primary"]["strike"])
     d = df.sort_values("Strike").reset_index(drop=True)
     ai = int((d["Strike"] - spot).abs().idxmin())
     view = d.iloc[max(ai - n, 0): ai + n + 1]
+    view = pd.concat([view, d[d["Strike"].isin([sup_k, res_k])]]).drop_duplicates(subset=["Strike"])
     keys = [k for k in list(view["Call Key"]) + list(view["Put Key"]) if isinstance(k, str) and k]
     if not keys:
         return {"error": "Option ke instrument key nahi mile, pressure nahi nikal sakta."}
@@ -1618,20 +1674,16 @@ def build_pressure_full(df, spot, n, ana):
     end_t = max(h["time"].max() for h in hist.values()).time()
     if end_t > dt_time(15, 30):
         end_t = dt_time(15, 30)
-    m = _win_metrics(view, hist, end_t)
-    if m.empty:
-        return {"error": f"{PRESS_START:%H:%M} se ab tak ka data abhi nahi hai. Market khulne ke baad dobara dabayein."}
-    sup_k = float(ana["demand"]["primary"]["strike"]) if ana.get("demand") else None
-    res_k = float(ana["supply"]["primary"]["strike"]) if ana.get("supply") else None
-    s_state, s_at = _zone_state(m, "Put", sup_k, spot, "sup")
-    r_state, r_at = _zone_state(m, "Call", res_k, spot, "res")
-    s_tl = _timeline(view, hist, end_t, "Put", s_at, sup_k, "sup", s_state, spot)
-    r_tl = _timeline(view, hist, end_t, "Call", r_at, res_k, "res", r_state, spot)
+    rt = _vol_trend(view, hist, end_t, "Call", res_k)
+    st_ = _vol_trend(view, hist, end_t, "Put", sup_k)
+    if rt is None or st_ is None:
+        return {"error": f"{PRESS_START:%H:%M} se ab tak ka volume data abhi nahi hai. Market khulne ke baad dobara dabayein."}
+    col, result = PRESS_MATRIX[(rt["trend"], st_["trend"])]
     return {
-        "support": {"state": s_state, "zone": sup_k, "at": s_at, "tl": s_tl},
-        "resistance": {"state": r_state, "zone": res_k, "at": r_at, "tl": r_tl},
-        "column": PRESS_COL[(s_state, r_state)],
-        "alert": s_state == "DOWN" and r_state == "DOWN",
+        "support": {"state": st_["trend"], "zone": sup_k, "at": None, "tl": None, "share": st_["share"]},
+        "resistance": {"state": rt["trend"], "zone": res_k, "at": None, "tl": None, "share": rt["share"]},
+        "column": col, "result": result,
+        "alert": result == "Bearish",
         "support_strike": sup_k,
         "end_label": end_t.strftime("%H:%M"),
         "n_ok": len(hist), "n_all": len(keys),
@@ -1642,12 +1694,11 @@ def pressure_html(pr):
     def row(name, d):
         if d["zone"] is None:
             return f"{name}: zone nahi mila"
-        extra = f" (shift {fs(d['at'])} par)" if d["at"] else ""
-        line = f"{name} <b>{fs(d['zone'])}</b> → {PRESS_LABEL[d['state']]}{extra}"
-        if d.get("tl"):
-            line += f"<br><span style='font-size:12px;color:#374151'>↳ {d['tl']['text']}</span>"
-        return line
-    return (f"🧭 <b>Pressure matrix</b> ({PRESS_START:%H:%M}–{pr.get('end_label', '')}) · Column <b>{pr['column']}</b><br>"
+        strong = "मज़बूत" if d.get("share", 0) >= 60 else "कमज़ोर"
+        return (f"{name} <b>{fs(d['zone'])}</b> → {TREND_TXT[d['state']]} · {strong} "
+                f"({d.get('share', 0):.0f}%)")
+    return (f"🧭 <b>Pressure matrix</b> (Volume) · {PRESS_START:%H:%M}–{pr.get('end_label', '')} · "
+            f"Column <b>{pr['column']}</b> · <b>{pr['result']}</b><br>"
             f"{row('Support', pr['support'])}<br>{row('Resistance', pr['resistance'])}<br>"
             f"<span style='font-size:11px;color:#374151'>{pr['n_ok']}/{pr['n_all']} options ka data mila</span>")
 
@@ -1711,6 +1762,84 @@ def zone_test_table_html(rows):
             f'<thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>')
 
 
+# ---------------- Volume matrix (Volume + Zone wale notes ke hisaab se, sirf Volume, koi OI nahi) ----------------
+VM_MAP = {("↑", "↔"): ("Bullish", 1), ("↓", "↔"): ("Bearish", 2), ("↔", "↔"): ("Consolidated", 3),
+          ("↑", "↑"): ("Sideways (—)", 4), ("↓", "↑"): ("Bearish", 5), ("↔", "↑"): ("Bearish", 6),
+          ("↔", "↓"): ("Bullish", 7), ("↑", "↓"): ("Bullish", 8), ("↓", "↓"): ("Consolidated", 9)}
+
+
+def _vol_trend(view, hist, side, k, end_t):
+    """Volume share (max ke mukable %) pehle half aur doosre half mein; badh raha to ↑, ghat raha to ↓, warna ↔."""
+    key_col = "Call Key" if side == "Call" else "Put Key"
+    rows = []
+    for _, r in view.iterrows():
+        h = hist.get(r.get(key_col))
+        if h is None or h.empty:
+            continue
+        tm = h["time"].dt.time
+        w = h[(tm >= PRESS_START) & (tm <= end_t)]
+        if w.empty:
+            continue
+        mid = w["time"].iloc[len(w) // 2]
+        a = float(w[w["time"] < mid]["vol"].sum())
+        b = float(w[w["time"] >= mid]["vol"].sum())
+        rows.append((float(r["Strike"]), a, b))
+    t = pd.DataFrame(rows, columns=["k", "a", "b"])
+    if t.empty or not (t["k"] == k).any():
+        return None, "data nahi"
+    ma, mb = max(float(t["a"].max()), 1.0), max(float(t["b"].max()), 1.0)
+    row = t[t["k"] == k].iloc[0]
+    sa, sb = row["a"] / ma * 100, row["b"] / mb * 100
+    if sb >= 60 and sb > sa + 5:
+        arrow = "↑"
+    elif sa >= 60 and sb < sa - 5:
+        arrow = "↓"
+    else:
+        arrow = "↔"
+    return arrow, f"{fs(k)} par volume share {sa:.0f}% → {sb:.0f}%"
+
+
+def build_volume_matrix(df, spot, n, ana):
+    vs = (ana or {}).get("zone_sets", {}).get("vol", {})
+    if not vs.get("supply") or not vs.get("demand"):
+        return {"error": "Volume zone 1 nahi bana, matrix nahi nikal sakta."}
+    d = df.sort_values("Strike").reset_index(drop=True)
+    ai = int((d["Strike"] - spot).abs().idxmin())
+    view = d.iloc[max(ai - n, 0): ai + n + 1]
+    keys = [k for k in list(view["Call Key"]) + list(view["Put Key"]) if isinstance(k, str) and k]
+    if not keys:
+        return {"error": "Option ke instrument key nahi mile."}
+    hist, errs = {}, []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for key, h, e in ex.map(fetch_option_hist, keys):
+            if h is not None:
+                hist[key] = h
+            else:
+                errs.append(e)
+    if not hist:
+        return {"error": "Option ki history nahi aayi. Upstox ka jawab: " + (errs[0] if errs else "khali")}
+    end_t = max(h["time"].max() for h in hist.values()).time()
+    if end_t > dt_time(15, 30):
+        end_t = dt_time(15, 30)
+    r_k, s_k = float(vs["supply"][0]["strike"]), float(vs["demand"][0]["strike"])
+    ra, rtxt = _vol_trend(view, hist, "Call", r_k, end_t)
+    sa, stxt = _vol_trend(view, hist, "Put", s_k, end_t)
+    if ra is None or sa is None:
+        return {"error": "Volume ka trend nahi nikal paya (data kam hai). Market khulne ke baad dobara dabayein."}
+    label, col = VM_MAP[(ra, sa)]
+    return {"res_k": r_k, "sup_k": s_k, "res_arrow": ra, "sup_arrow": sa, "res_txt": rtxt, "sup_txt": stxt,
+            "label": label, "column": col, "end_label": end_t.strftime("%H:%M")}
+
+
+def volume_matrix_html(vm):
+    arrow_word = {"↑": "badh raha", "↓": "ghat raha", "↔": "stable"}
+    return (f"📋 <b>Volume matrix</b> (9:17–{vm['end_label']}) · Column <b>{vm['column']}</b> → <b>{vm['label']}</b><br>"
+            f"Resistance <b>{fs(vm['res_k'])}</b> → {vm['res_arrow']} {arrow_word[vm['res_arrow']]}"
+            f"<br><span style='font-size:12px;color:#374151'>↳ {vm['res_txt']}</span><br>"
+            f"Support <b>{fs(vm['sup_k'])}</b> → {vm['sup_arrow']} {arrow_word[vm['sup_arrow']]}"
+            f"<br><span style='font-size:12px;color:#374151'>↳ {vm['sup_txt']}</span>")
+
+
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
 def fetch_candles(inst_key):
@@ -1764,13 +1893,14 @@ def zone_marks(ana):
     st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
     pr = st.session_state.get("pressure") or {}
     same = bool(pr) and pr.get("inst") == inst_name and pr.get("exp") == expiry_date and not pr.get("error")
-    if ana and ana.get("demand"):
-        k = fs(ana["demand"]["primary"]["strike"])
-        extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
+    vs = (ana or {}).get("zone_sets", {}).get("vol", {}) if ana else {}
+    if vs and vs.get("demand"):
+        k = fs(vs["demand"][0]["primary"]["strike"])
+        extra = f" · {TREND_TXT.get(pr['support']['state'], '')}" if same else ""
         m[k] = {"bg": "#bbf7d0", "fg": "#15803d", "txt": "🟢 SUPPORT" + extra}
-    if ana and ana.get("supply"):
-        k = fs(ana["supply"]["primary"]["strike"])
-        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
+    if vs and vs.get("supply"):
+        k = fs(vs["supply"][0]["primary"]["strike"])
+        extra = f" · {TREND_TXT.get(pr['resistance']['state'], '')}" if same else ""
         m[k] = {"bg": "#fecaca", "fg": "#b91c1c", "txt": "🔴 RESISTANCE" + extra}
     return m
 
@@ -1884,7 +2014,18 @@ def render_page():
             st.markdown(f'<div style="background:#f5f3ff;color:#111;padding:10px;border-radius:8px">{pressure_html(pr)}</div>',
                         unsafe_allow_html=True)
             if pr["alert"]:
-                st.error("⚠️ Support ke paas BEARISH pressure: support aur resistance dono ⬇ hain. Chart par support zone par alert dikhega.")
+                st.error("⚠️ Pressure result BEARISH hai. Chart par support zone par alert dikhega.")
+        if st.button("📋 Volume matrix dekho (9:17 se ab tak)"):
+            with st.spinner("Volume trend nikal raha hoon..."):
+                st.session_state["vmatrix"] = {"inst": inst_name, "exp": expiry_date,
+                                               **build_volume_matrix(df, spot, n_strikes, ana)}
+        vm = st.session_state.get("vmatrix")
+        if vm and vm.get("inst") == inst_name and vm.get("exp") == expiry_date:
+            if vm.get("error"):
+                st.warning(vm["error"])
+            else:
+                st.markdown(f'<div style="background:#ecfdf5;color:#111;padding:10px;border-radius:8px">{volume_matrix_html(vm)}</div>',
+                            unsafe_allow_html=True)
         if st.button("🤖 AI summary (Gemini / Claude)"):
             summary = {"instrument": inst_name, "spot": spot, "expiry": expiry_date, "bias": ana["bias"],
                        "pcr": round(ana["pcr"], 2), "max_pain": ana["max_pain"], "zone_width_points": ana["zone_width"],
