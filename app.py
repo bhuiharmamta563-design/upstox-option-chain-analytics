@@ -889,7 +889,7 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
         flags = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}"
         label = flags + f"{nm} · {pct_txt}"
         main_label = flags + f"{nm} · {prim_pct}"
-        sec_col = "#15803d" if g["side"] == "supply" else "#b91c1c"   # Call side ka 2nd hara, Put side ka laal
+        sec_col = "#15803d" if g["side"] == "demand" else "#b91c1c"   # Support (demand) hara, Resistance (supply) laal
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
         pa = (ana or {}).get("pressure_alert")
