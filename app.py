@@ -1912,31 +1912,67 @@ def current_shift():
     return None
 
 
-def zone_marks(ana):
-    """Option chain mein saare Volume zones ke strike par rang: Support (hara, dark) aur Resistance (laal, dark).
-    Zone 1 par label SUPPORT / RESISTANCE, baaki par SUPPORT 2 / RESISTANCE 2 ...
+def zone_marks(ana, df, spot):
+    """Option chain ke rang / labels:
+    - SUPPORT / RESISTANCE = Volume zone 1 (hamesha).
+    - SUPPORT 2 / RESISTANCE 2 (75% se upar wale strike):
+        * ATM ki taraf (zone 1 aur ATM ke beech): Volume ya OI, dono mein se EK 75% se upar ho to dikhe.
+        * ATM se door (zone 1 se aage, OTM): Volume AUR OI DONO 75% se upar hon tabhi dikhe.
     Pressure matrix chalaya ho to zone 1 ke label mein uska state bhi."""
     m = {}
     st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
     pr = st.session_state.get("pressure") or {}
     same = bool(pr) and pr.get("inst") == inst_name and pr.get("exp") == expiry_date and not pr.get("error")
     vs = (ana or {}).get("zone_sets", {}).get("vol", {}) if ana else {}
-    for zi, z in enumerate(vs.get("demand", []) or []):
-        k = fs(z["primary"]["strike"])
-        name = "SUPPORT" if zi == 0 else f"SUPPORT {z.get('rank', zi + 1)}"
-        extra = f" · {st_txt.get(pr['support']['state'], '')}" if (same and zi == 0) else ""
-        m[k] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 " + name + extra}
-    for zi, z in enumerate(vs.get("supply", []) or []):
-        k = fs(z["primary"]["strike"])
-        name = "RESISTANCE" if zi == 0 else f"RESISTANCE {z.get('rank', zi + 1)}"
-        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if (same and zi == 0) else ""
-        m[k] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 " + name + extra}
+    if df is None or df.empty or not vs:
+        return m
+    d = df.sort_values("Strike").reset_index(drop=True)
+    atm = float(d.loc[(d["Strike"] - spot).abs().idxmin(), "Strike"])
+    mx = {c: max(float(d[c].max()), 1.0) for c in ("Call Vol", "Call OI", "Put Vol", "Put OI")}
+
+    def pcts(row, side):
+        return (float(row[f"{side} Vol"]) / mx[f"{side} Vol"] * 100, float(row[f"{side} OI"]) / mx[f"{side} OI"] * 100)
+
+    def ok_2(row, side, inner):
+        pv, po = pcts(row, side)
+        return (max(pv, po) >= 75) if inner else (pv >= 75 and po >= 75)
+
+    if vs.get("demand"):
+        z1 = vs["demand"][0]
+        s1 = float(z1["primary"]["strike"])
+        extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
+        m[fs(s1)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT" + extra}
+        for _, r in d.iterrows():
+            k = float(r["Strike"])
+            if k == s1 or k > atm:
+                continue
+            if k > s1 and k <= atm:                      # zone 1 aur ATM ke beech (ATM ki taraf)
+                if ok_2(r, "Put", True):
+                    m[fs(k)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT 2"}
+            elif k < s1:                                 # zone 1 se aage (OTM)
+                if ok_2(r, "Put", False):
+                    m[fs(k)] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 SUPPORT 2"}
+    if vs.get("supply"):
+        r1z = vs["supply"][0]
+        r1 = float(r1z["primary"]["strike"])
+        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
+        m[fs(r1)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE" + extra}
+        for _, r in d.iterrows():
+            k = float(r["Strike"])
+            if k == r1 or k < atm:
+                continue
+            if atm <= k < r1:                            # ATM aur zone 1 ke beech (ATM ki taraf)
+                if ok_2(r, "Call", True):
+                    m[fs(k)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE 2"}
+            elif k > r1:                                 # zone 1 se aage (OTM)
+                if ok_2(r, "Call", False):
+                    m[fs(k)] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 RESISTANCE 2"}
     return m
 
 
 def render_table(df, spot, n, ana, show_summary, label, height):
     components.html(table_shell_html(), height=height, scrolling=True)
-    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift(), zone_marks(ana))}), height=0)
+    components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift(), zone_marks(ana, df, spot))}), height=0)
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
