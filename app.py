@@ -585,7 +585,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             + chg_cell(r["Call OI Chg"], cbg)
             + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
             + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
-            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'
+            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px;color:{mk["numfg"] if mk else "#111"}">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'
             # PUTS: Volume | OI | OI Chg | LTP | Zone | PCR | IV
             + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
             + bar_cell(f'{r["Put OI"] / 1e5:.1f}', r["Put OI"] / mx["Put OI"] * 100, pbg, "rgba(74,222,128,.6)", "to right", "green")
@@ -1913,20 +1913,24 @@ def current_shift():
 
 
 def zone_marks(ana):
-    """Option chain mein support / resistance strike. Pressure matrix chalaya ho to uska state bhi."""
+    """Option chain mein saare Volume zones ke strike par rang: Support (hara, dark) aur Resistance (laal, dark).
+    Zone 1 par label SUPPORT / RESISTANCE, baaki par SUPPORT 2 / RESISTANCE 2 ...
+    Pressure matrix chalaya ho to zone 1 ke label mein uska state bhi."""
     m = {}
     st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
     pr = st.session_state.get("pressure") or {}
     same = bool(pr) and pr.get("inst") == inst_name and pr.get("exp") == expiry_date and not pr.get("error")
     vs = (ana or {}).get("zone_sets", {}).get("vol", {}) if ana else {}
-    if vs and vs.get("demand"):
-        k = fs(vs["demand"][0]["primary"]["strike"])
-        extra = f" · {TREND_TXT.get(pr['support']['state'], '')}" if same else ""
-        m[k] = {"bg": "#bbf7d0", "fg": "#15803d", "txt": "🟢 SUPPORT" + extra}
-    if vs and vs.get("supply"):
-        k = fs(vs["supply"][0]["primary"]["strike"])
-        extra = f" · {TREND_TXT.get(pr['resistance']['state'], '')}" if same else ""
-        m[k] = {"bg": "#fecaca", "fg": "#b91c1c", "txt": "🔴 RESISTANCE" + extra}
+    for zi, z in enumerate(vs.get("demand", []) or []):
+        k = fs(z["primary"]["strike"])
+        name = "SUPPORT" if zi == 0 else f"SUPPORT {z.get('rank', zi + 1)}"
+        extra = f" · {st_txt.get(pr['support']['state'], '')}" if (same and zi == 0) else ""
+        m[k] = {"bg": "#15803d", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🟢 " + name + extra}
+    for zi, z in enumerate(vs.get("supply", []) or []):
+        k = fs(z["primary"]["strike"])
+        name = "RESISTANCE" if zi == 0 else f"RESISTANCE {z.get('rank', zi + 1)}"
+        extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if (same and zi == 0) else ""
+        m[k] = {"bg": "#b91c1c", "fg": "#ffffff", "numfg": "#ffffff", "txt": "🔴 " + name + extra}
     return m
 
 
