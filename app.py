@@ -877,14 +877,14 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
             if sec and sec["strike"] != fs(float(m["strike"])):
                 pct_parts.append(f"2nd {tg} {sec['strike']:g} {sec['pct']:.0f}%")
         pct_txt = " · ".join(pct_parts)
-        nm = zone_name(g, tag=False) if legacy else zone_name(g)
-        if legacy:
+        nm = zone_name(g, tag=False)
+        if True:                                  # Price aur Volume dono chart mein same format
             prim = next((m for m in g["members"] if m["basis"] == "vol"), None) or min(g["members"], key=lambda m: m["rank"])
             sec = (ana or {}).get("second", {}).get((prim["basis"], g["side"]))
             pct_txt = f"{prim['pct']:.0f}%"
             if sec and sec["strike"] != fs(float(prim["strike"])):
                 pct_txt += f" · 2nd {sec['strike']:g} {sec['pct']:.0f}%"
-        mid_txt = f"{nm} · {pct_txt}" if legacy else f"{nm} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p) · {pct_txt}"
+        mid_txt = f"{nm} · {pct_txt}"
         label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{mid_txt}"
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
