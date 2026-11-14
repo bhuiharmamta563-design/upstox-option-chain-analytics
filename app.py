@@ -879,20 +879,25 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
                 pct_parts.append(f"2nd {tg} {sec['strike']:g} {sec['pct']:.0f}%")
         pct_txt = " · ".join(pct_parts)
         nm = zone_name(g, tag=False)
-        if True:                                  # Price aur Volume dono chart mein same format
-            prim = next((m for m in g["members"] if m["basis"] == "vol"), None) or min(g["members"], key=lambda m: m["rank"])
-            sec = (ana or {}).get("second", {}).get((prim["basis"], g["side"]))
-            pct_txt = f"{prim['pct']:.0f}%"
-            if sec and sec["strike"] != fs(float(prim["strike"])):
-                pct_txt += f" · 2nd {sec['strike']:g} {sec['pct']:.0f}%"
-        mid_txt = f"{nm} · {pct_txt}"
-        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{mid_txt}"
+        prim = next((m for m in g["members"] if m["basis"] == "vol"), None) or min(g["members"], key=lambda m: m["rank"])
+        sec = (ana or {}).get("second", {}).get((prim["basis"], g["side"]))
+        prim_pct = f"{prim['pct']:.0f}%"
+        sec_part = ""
+        if sec and sec["strike"] != fs(float(prim["strike"])):
+            sec_part = f" · 2nd {sec['strike']:g} {sec['pct']:.0f}%"
+        pct_txt = prim_pct + sec_part
+        flags = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}"
+        label = flags + f"{nm} · {pct_txt}"
+        main_label = flags + f"{nm} · {prim_pct}"
+        sec_col = "#15803d" if g["side"] == "supply" else "#b91c1c"   # Call side ka 2nd hara, Put side ka laal
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
         pa = (ana or {}).get("pressure_alert")
         if pa is not None and g["side"] == "demand" and abs(float(g["level"]) - float(pa)) < 1e-6:
             label = "⚠️ BEARISH PRESSURE · " + label
-        items.append({"label": label, "short": short, "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
+            main_label = "⚠️ BEARISH PRESSURE · " + main_label
+        items.append({"label": label, "main": main_label, "sec": sec_part, "seccol": sec_col, "short": short,
+                      "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
                       "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True, "broke": broke})
     return items
 
@@ -1054,7 +1059,7 @@ function drawPrice(){
   var zy = zv.map(function(q){ var t = (q[2] - q[1]) >= 20 ? (q[0].side === 'demand' ? q[2] - 6 : q[1] + 13) : q[1] - 4; return Math.min(Math.max(t, T + 12), T + ph - 4); });
   zy = spread(zy, 13);
   zv.forEach(function(q, k){
-    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + (q[0].side === 'supply' ? '#b91c1c' : '#15803d') + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].label + '</text>');
+    cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + (q[0].side === 'supply' ? '#b91c1c' : '#15803d') + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].main + (q[0].sec ? '<tspan fill="' + q[0].seccol + '">' + q[0].sec + '</tspan>' : '') + '</text>');
   });
   D.lines.forEach(function(l){
     var y = Y(l.val);
@@ -1333,7 +1338,8 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
         "labels": [f"{r.time:{xfmt}}" for r in rows],
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
-        "zones": [{"label": i["label"], "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
+        "zones": [{"label": i["label"], "main": i.get("main", i["label"]), "sec": i.get("sec", ""), "seccol": i.get("seccol", ""),
+                   "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
         "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
     }
