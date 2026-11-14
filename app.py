@@ -105,6 +105,8 @@ PAGE_LIGHT = """<style>
 [data-testid=stNumberInput] button svg {fill:#111111 !important;color:#111111 !important;}
 [data-testid=stTextInput] input, [data-testid=stTextInput] [data-baseweb=base-input], [data-testid=stTextInput] [data-baseweb=base-input] div {background:#ffffff !important;color:#111111 !important;border-color:#d1d5db !important;}
 [data-testid=stTextInput] input::placeholder {color:#6b7280 !important;}
+[data-testid=stAlert], [data-testid=stAlertContainer] {background:#fffbeb !important;}
+[data-testid=stAlert] *, [data-testid=stAlertContainer] * {color:#111111 !important;}
 [data-testid=stHeader], [data-testid=stToolbar] {background:#ffffff !important;}
 [data-testid=stToolbar] *, [data-testid=stHeader] * {color:#111111 !important;}
 [data-testid=stToolbar] svg, [data-testid=stHeader] svg {fill:#111111 !important;stroke:#111111 !important;}
@@ -1496,7 +1498,7 @@ def fetch_option_hist(key):
         cs = (data.get("data") or {}).get("candles") or []
         if not cs:
             e = data.get("errors") or [{}]
-            return key, None, str(e[0].get("message") or data.get("status") or "khali")[:80]
+            return key, None, str(e[0].get("message") or ("aaj ka candle data khali aaya" if data.get("status") == "success" else (data.get("status") or "khali")))[:80]
         c = pd.DataFrame(cs).iloc[:, :7]
         c.columns = ["time", "o", "h", "l", "c", "vol", "oi"]
         c["time"] = pd.to_datetime(c["time"], utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
@@ -2115,9 +2117,8 @@ def render_page():
         # ---- Table ----
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
-        st.caption("Shifting ka aadhar samay (isse pehle ka data 'purana')")
         sc1, sc2, sc3 = st.columns([2, 2, 1])
-        cutoff_t = sc1.time_input("Samay", value=dt_time(9, 20), step=60, label_visibility="collapsed")
+        cutoff_t = sc1.time_input("Shifting samay", value=dt_time(9, 20), step=60, help="Isse pehle ka data 'purana' mana jayega")
         if sc2.button(f"🔀 Shifting dekho ({cutoff_t:%H:%M} ke baad)"):
             with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
                 res = build_shift(df, spot, n_strikes, cutoff_t)
