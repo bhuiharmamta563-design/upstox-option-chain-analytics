@@ -2162,15 +2162,18 @@ def render_page():
                 )
             return html + '</div>'
 
-        zs_ = ana["zone_sets"]
-        st.markdown("**📊 Volume ke hisaab se zone**")
-        va, vb = st.columns(2)
-        va.markdown(zone_card("🔴 SUPPLY (Call Volume)", zs_["vol"]["supply"], "supply", "#fff1f2", "#9f1239"), unsafe_allow_html=True)
-        vb.markdown(zone_card("🟢 DEMAND (Put Volume)", zs_["vol"]["demand"], "demand", "#f7fee7", "#4d7c0f"), unsafe_allow_html=True)
-        st.markdown("**📈 OI ke hisaab se zone**")
-        oa, ob = st.columns(2)
-        oa.markdown(zone_card("🔴 SUPPLY (Call OI)", zs_["oi"]["supply"], "supply", "#fef2f2", "#ef4444"), unsafe_allow_html=True)
-        ob.markdown(zone_card("🟢 DEMAND (Put OI)", zs_["oi"]["demand"], "demand", "#f0fdf4", "#16a34a"), unsafe_allow_html=True)
+        if st.button("📊 Zone cards dekho / chhupao"):
+            st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
+        if st.session_state.get("zc_show"):
+            zs_ = ana["zone_sets"]
+            st.markdown("**📊 Volume ke hisaab se zone**")
+            va, vb = st.columns(2)
+            va.markdown(zone_card("🔴 SUPPLY (Call Volume)", zs_["vol"]["supply"], "supply", "#fff1f2", "#9f1239"), unsafe_allow_html=True)
+            vb.markdown(zone_card("🟢 DEMAND (Put Volume)", zs_["vol"]["demand"], "demand", "#f7fee7", "#4d7c0f"), unsafe_allow_html=True)
+            st.markdown("**📈 OI ke hisaab se zone**")
+            oa, ob = st.columns(2)
+            oa.markdown(zone_card("🔴 SUPPLY (Call OI)", zs_["oi"]["supply"], "supply", "#fef2f2", "#ef4444"), unsafe_allow_html=True)
+            ob.markdown(zone_card("🟢 DEMAND (Put OI)", zs_["oi"]["demand"], "demand", "#f0fdf4", "#16a34a"), unsafe_allow_html=True)
 
 
 # Auto refresh: sirf data wala hissa dobara bante hai (fragment), poora page nahi, isliye screen smooth rehti hai
