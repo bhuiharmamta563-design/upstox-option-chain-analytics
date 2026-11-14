@@ -1994,11 +1994,13 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
-    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones"], horizontal=True)
+    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones"], horizontal=True, label_visibility="collapsed")
     vol_mode = view.startswith("📊 Volume")
     zv_flag, zo_flag = (True, False) if vol_mode else (show_vol_zones, show_oi_zones)
     if view.startswith("📈") or vol_mode:
-        tf = st.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min")
+        tl_col, tr_col = st.columns([1, 3])
+        tl_col.markdown("**Timeframe**")
+        tf = tr_col.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min", label_visibility="collapsed")
         candles, src, err = fetch_candles(inst_key)
         br = []
         if not candles.empty:
@@ -2023,7 +2025,10 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}|{vol_mode}", False, zv_flag, zo_flag, br, not vol_mode)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
-        if st.button("📊 Zone price test (aaj ke candles par)"):
+        zb_c1, zb_c2 = st.columns(2)
+        if zb_c2.button("📊 Zone cards dekho / chhupao"):
+            st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
+        if zb_c1.button("📊 Zone price test (aaj ke candles par)"):
             st.session_state["zbt"] = {"inst": inst_name, "rows": zone_backtest(candles, ana, 12), "tf": tf}
         zb = st.session_state.get("zbt")
         if zb and zb["inst"] == inst_name:
@@ -2038,6 +2043,8 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         components.html(zoom_shell_html("oi"), height=height, scrolling=True)
         components.html(push_html("oi", {"data": oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)}), height=0)
         st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
+        if st.button("📊 Zone cards dekho / chhupao"):
+            st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
 
 
 # ---------------- Page ----------------
@@ -2169,8 +2176,6 @@ def render_page():
                 )
             return html + '</div>'
 
-        if st.button("📊 Zone cards dekho / chhupao"):
-            st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
         if st.session_state.get("zc_show"):
             zs_ = ana["zone_sets"]
             st.markdown("**📊 Volume ke hisaab se zone**")
