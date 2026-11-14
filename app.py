@@ -585,7 +585,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             + chg_cell(r["Call OI Chg"], cbg)
             + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
             + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
-            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px;color:{mk["numfg"] if mk else "#111"}">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'
+            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px{(";color:" + mk["numfg"]) if mk else ""}">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'
             # PUTS: Volume | OI | OI Chg | LTP | Zone | PCR | IV
             + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
             + bar_cell(f'{r["Put OI"] / 1e5:.1f}', r["Put OI"] / mx["Put OI"] * 100, pbg, "rgba(74,222,128,.6)", "to right", "green")
