@@ -796,13 +796,15 @@ def zone_groups(ana, show_vol=True, show_oi=True):
     return groups
 
 
-def zone_name(g):
-    """Chart label: SUPPLY 1 / SUPPLY 2 / DEMAND 1 / DEMAND 2, aur basis (Vol / OI)."""
+def zone_name(g, tag=True):
+    """Chart label: SUPPLY 1 / SUPPLY 2 / DEMAND 1 / DEMAND 2, aur (tag=True ho to) basis (Vol / OI)."""
     side = "SUPPLY" if g["side"] == "supply" else "DEMAND"
     num = str(min(m["rank"] for m in g["members"]))
+    if not tag:
+        return f"{side} {num}"
     bases = {m["basis"] for m in g["members"]}
-    tag = " (Vol+OI)" if len(bases) > 1 else (" (Vol)" if "vol" in bases else " (OI)")
-    return f"{side} {num}{tag}"
+    tg = " (Vol+OI)" if len(bases) > 1 else (" (Vol)" if "vol" in bases else " (OI)")
+    return f"{side} {num}{tg}"
 
 
 def group_tag(g):
@@ -875,8 +877,15 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
             if sec and sec["strike"] != fs(float(m["strike"])):
                 pct_parts.append(f"2nd {tg} {sec['strike']:g} {sec['pct']:.0f}%")
         pct_txt = " · ".join(pct_parts)
-        nm = short if legacy else zone_name(g)
-        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{nm} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p) · {pct_txt}"
+        nm = zone_name(g, tag=False) if legacy else zone_name(g)
+        if legacy:
+            prim = next((m for m in g["members"] if m["basis"] == "vol"), None) or min(g["members"], key=lambda m: m["rank"])
+            sec = (ana or {}).get("second", {}).get((prim["basis"], g["side"]))
+            pct_txt = f"{prim['pct']:.0f}%"
+            if sec and sec["strike"] != fs(float(prim["strike"])):
+                pct_txt += f" · 2nd {sec['strike']:g} {sec['pct']:.0f}%"
+        mid_txt = f"{nm} · {pct_txt}" if legacy else f"{nm} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p) · {pct_txt}"
+        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{mid_txt}"
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
         pa = (ana or {}).get("pressure_alert")
