@@ -2135,9 +2135,9 @@ def render_page():
         # ---- Table ----
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
-        sc1, sc2, sc3 = st.columns([2, 2, 1])
-        cutoff_t = sc1.time_input("Shifting samay", value=dt_time(9, 20), step=60, help="Isse pehle ka data 'purana' mana jayega")
-        if sc2.button(f"🔀 Shifting dekho ({cutoff_t:%H:%M} ke baad)"):
+        sc1, sc2, sc3 = st.columns([1, 1.4, 0.7])
+        cutoff_t = sc1.time_input("Samay", value=dt_time(9, 20), step=60, label_visibility="collapsed", help="Isse pehle ka data 'purana' mana jayega")
+        if sc2.button("🔀 Shifting dekho"):
             with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
                 res = build_shift(df, spot, n_strikes, cutoff_t)
             st.session_state["shift"] = {"inst": inst_name, "exp": expiry_date, **res}
