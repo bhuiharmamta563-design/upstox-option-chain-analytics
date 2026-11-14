@@ -276,6 +276,7 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
         return z
 
     zone_sets = {"vol": {"supply": [], "demand": []}, "oi": {"supply": [], "demand": []}}
+    second_store = {}
     for basis in ("vol", "oi"):
         for side in ("supply", "demand"):
             col = ("Call " if side == "supply" else "Put ") + ("Vol" if basis == "vol" else "OI")
@@ -291,6 +292,14 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
             if near.empty:
                 near = pool
             i1 = near[col].idxmax()                                  # Zone 1: market price ke paas ka sabse zyada
+            _srt = near.sort_values(col, ascending=False)
+            _sec = None
+            if len(_srt) > 1:
+                _r2 = _srt.iloc[1]
+                _p2 = float(_r2[col]) / colmax[col] * 100
+                if _p2 >= 75:
+                    _sec = {"strike": fs(float(_r2["Strike"])), "pct": _p2}
+            second_store[(basis, side)] = _sec
             kp = (prev or {}).get(f"{basis}_{side}")                 # HOLD: pichla zone tab tak rahe jab tak naya 15%+ zyada mazboot na ho
             if kp is not None:
                 rp = near[near["Strike"] == kp]
@@ -376,7 +385,7 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
         bias = "SIDEWAYS / RANGE-BOUND 🟡"
 
     return {
-        "supply": supply, "demand": demand, "zones": zones_flat, "zone_sets": zone_sets, "zone_width": w,
+        "supply": supply, "demand": demand, "zones": zones_flat, "zone_sets": zone_sets, "zone_width": w, "second": second_store,
         "liq": liq, "step": step,
         "max_pain": max_pain, "pcr": pcr,
         "chg_c": chg_c, "chg_p": chg_p, "points": pts, "bias": bias, "reasons": reasons,
@@ -849,7 +858,7 @@ def option_weak_hint(sh_or_none, side, zone_low, zone_high):
     return None
 
 
-def zone_items(ana, show_vol=True, show_oi=True, breached=None):
+def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
     items = []
     for g in zone_groups(ana, show_vol, show_oi):
         short, both, drop = group_tag(g)
@@ -858,9 +867,16 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None):
         color = ("#ef4444" if has_oi else "#9f1239") if sup else ("#16a34a" if has_oi else "#4d7c0f")
         alpha = 0.26 if both else 0.18 if any(m["rank"] == 1 for m in g["members"]) else 0.10
         broke = bool(breached) and any(abs(float(b["low"]) - float(g["low"])) < 1e-6 and b["side"] == g["side"] for b in breached)
-        pct_txt = " · ".join(f"{'Vol' if m['basis'] == 'vol' else 'OI'} {m['pct']:.0f}%"
-                             for m in sorted(g["members"], key=lambda m: (m["basis"] != "vol", m["rank"])))
-        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{zone_name(g)} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p) · {pct_txt}"
+        pct_parts = []
+        for m in sorted(g["members"], key=lambda m: (m["basis"] != "vol", m["rank"])):
+            tg = "Vol" if m["basis"] == "vol" else "OI"
+            pct_parts.append(f"{tg} {m['pct']:.0f}%")
+            sec = (ana or {}).get("second", {}).get((m["basis"], g["side"]))
+            if sec and sec["strike"] != fs(float(m["strike"])):
+                pct_parts.append(f"2nd {tg} {sec['strike']:g} {sec['pct']:.0f}%")
+        pct_txt = " · ".join(pct_parts)
+        nm = short if legacy else zone_name(g)
+        label = f"{'✖ ' if broke else ''}{'⭐ ' if both else ''}{'💧 ' if drop else ''}{nm} {fs(g['low'])}-{fs(g['high'])} ({fs(g['width'])}p) · {pct_txt}"
         if broke:
             color, alpha = "#6b7280", 0.06                       # toota zone: dhundhla slate rang
         pa = (ana or {}).get("pressure_alert")
@@ -1289,8 +1305,8 @@ def zoom_shell_html(kind):
     return DARK_CSS + html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
 
 
-def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None):
-    items, lines = zone_items(ana, show_vol, show_oi, breached), level_lines(ana, spot)
+def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None, legacy=False):
+    items, lines = zone_items(ana, show_vol, show_oi, breached, legacy), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
     flo, fhi = float(min(vals)), float(max(vals))
     fpad = (fhi - flo) * 0.04 or 5
@@ -1931,13 +1947,13 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             )
             fake = pd.DataFrame({"time": [pd.Timestamp("2000-01-01")], "open": [spot], "high": [spot],
                                  "low": [spot], "close": [spot], "volume": [0]})
-            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", True, zv_flag, zo_flag)
+            data = price_chart_data(fake, spot, ana, "%H:%M", f"{inst_name}|fake", True, zv_flag, zo_flag, None, not vol_mode)
         else:
             if src == "intraday":
                 candles, xfmt = resample_candles(candles, tf), "%H:%M"
             else:
                 xfmt = "%d %b %H:%M"
-            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}|{vol_mode}", False, zv_flag, zo_flag, br)
+            data = price_chart_data(candles.tail(200), spot, ana, xfmt, f"{inst_name}|{tf}|{src}|{len(br)}|{vol_mode}", False, zv_flag, zo_flag, br, not vol_mode)
         components.html(zoom_shell_html("price"), height=height, scrolling=True)
         components.html(push_html("price", {"data": data}), height=0)
         if st.button("📊 Zone price test (aaj ke candles par)"):
