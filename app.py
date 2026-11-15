@@ -913,7 +913,10 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
         if pa is not None and g["side"] == "demand" and abs(float(g["level"]) - float(pa)) < 1e-6:
             label = "⚠️ BEARISH PRESSURE · " + label
             main_label = "⚠️ BEARISH PRESSURE · " + main_label
-        items.append({"label": label, "main": main_label, "sec": sec_part, "seccol": sec_col, "short": short,
+        sec_k = float(sec["strike"]) if sec_part else None
+        sec_t = (f"2nd {sec['strike']:g} {pct_s(sec['pct'])}") if sec_part else ""
+        items.append({"label": label, "main": main_label, "sec": "", "seccol": sec_col, "short": short,
+                      "secK": sec_k, "secT": sec_t,
                       "shortp": f"{short} · {prim_pct}{sec_part}",
                       "lo": float(g["low"]), "hi": float(g["high"]), "color": color,
                       "alpha": alpha, "level": fs(g["level"]), "key": g["side"], "single": True, "broke": broke})
@@ -1078,6 +1081,14 @@ function drawPrice(){
   zy = spread(zy, 13);
   zv.forEach(function(q, k){
     cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + (q[0].side === 'supply' ? '#b91c1c' : '#15803d') + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].main + (q[0].sec ? '<tspan fill="' + q[0].seccol + '">' + q[0].sec + '</tspan>' : '') + '</text>');
+  });
+  var secSeen = {};
+  D.zones.forEach(function(z){
+    if (z.secK === null || z.secK === undefined || !z.secT) return;
+    var key = z.secK + '|' + z.seccol; if (secSeen[key]) return; secSeen[key] = 1;
+    var ys = Y(z.secK);
+    if (ys < T || ys > T + ph) return;
+    cl.push('<text x="' + (L + 6) + '" y="' + f1(ys + 12) + '" font-size="10" font-weight="700" fill="' + z.seccol + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + z.secT + '</text>');
   });
   D.lines.forEach(function(l){
     var y = Y(l.val);
@@ -1357,6 +1368,7 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
         "labels": [f"{r.time:{xfmt}}" for r in rows],
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
         "zones": [{"label": i["label"], "main": i.get("main", i["label"]), "sec": i.get("sec", ""), "seccol": i.get("seccol", ""),
+                   "secK": i.get("secK"), "secT": i.get("secT", ""),
                    "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
         "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
