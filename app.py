@@ -577,7 +577,11 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
         pbg = ITM if s > spot else NORM
         is_atm = s == atm_strike
         mk = marks.get(fs(s))
-        strike_bg = mk["bg"] if mk else "#e5e7eb"          # support/resistance strike ka rang, baaki ek hi color
+        strike_bg = mk["bg"] if (mk and mk.get("bg")) else "#e5e7eb"          # support/resistance strike ka rang, baaki ek hi color
+        if mk and mk.get("dual"):
+            bg_css = "background-image:linear-gradient(to bottom,#b91c1c 50%,#15803d 50%)"
+        else:
+            bg_css = f"background-color:{strike_bg}"
 
         zone_td, pcr_td = "", ""
         if show_summary:
@@ -595,7 +599,10 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             + chg_cell(r["Call OI Chg"], cbg)
             + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
             + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
-            + f'<td style="background-color:{strike_bg};font-weight:800;font-size:14px{(";color:" + mk["numfg"]) if mk else ""}">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'
+            + (f'<td style="background:linear-gradient(to bottom,#b91c1c 0 48%,#15803d 52% 100%);font-weight:800;font-size:14px;color:#ffffff">'
+               f'<div style="font-size:9px;font-weight:700;color:#fecaca">{mk["top"]}</div>{fs(s)}'
+               f'<div style="font-size:9px;font-weight:700;color:#bbf7d0">{mk["bot"]}</div></td>' if (mk and mk.get("both")) else
+               (f'<td style="{bg_css};font-weight:800;font-size:14px;color:#ffffff">' + f'<div style="font-size:9px;font-weight:700;color:#ffffff">{mk["dual"][0][0]}</div>{fs(s)}<div style="font-size:9px;font-weight:700;color:#ffffff">{mk["dual"][1][0]}</div></td>' if (mk and mk.get("dual")) else f'<td style="{bg_css};font-weight:800;font-size:14px{(";color:" + mk["numfg"]) if mk else ""}">{fs(s)}' + (f'<div style="font-size:9px;font-weight:700;color:{mk["fg"]}">{mk["txt"]}</div>' if mk else '') + '</td>'))
             # PUTS: Volume | OI | OI Chg | LTP | Zone | PCR | IV
             + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
             + bar_cell(f'{r["Put OI"] / 1e5:.1f}', r["Put OI"] / mx["Put OI"] * 100, pbg, "rgba(74,222,128,.6)", "to right", "green")
@@ -1932,19 +1939,17 @@ def current_shift():
 
 
 def zone_marks(ana, df, spot):
-    """Option chain ke labels (short form):
-    - Zone 1 hamesha qualify karta hai: support = 'S - WTT', resistance = 'R - WTB'.
-    - Baaki strike rules se: market ke paas (ATM ki taraf) ek bhi 75%+ -> tag; market se door dono 75%+ -> tag.
-        Support: paas -> WTT, door -> WTB.   Resistance: paas -> WTB, door -> WTT.
-    - Ek side par sirf ek label ho to 'S - WTT' / 'R - WTB'; ek se zyada ho to 'S1 - WTT', 'S2 - WTB' ... (market price ke paas se).
+    """Option chain ke labels (dono side ek hi strike par ho to cell mein 3 hisse):
+    - Zone 1: SUPPORT - WTT (support) / RESISTANCE - WTB (resistance).
+    - Baaki (75% rule): S / R, numbering 1,2.. (ek ho to bina number).
+    - Ek hi strike par support aur resistance dono ho:  upar resistance (laal), beech strike, neeche support (hara).
     Pressure matrix chalaya ho to zone 1 ke label mein uska state bhi."""
-    m = {}
     st_txt = {"STRONG": "मज़बूत", "UP": "बुलिश", "DOWN": "बेयरिश"}
     pr = st.session_state.get("pressure") or {}
     same = bool(pr) and pr.get("inst") == inst_name and pr.get("exp") == expiry_date and not pr.get("error")
     vs = (ana or {}).get("zone_sets", {}).get("vol", {}) if ana else {}
     if df is None or df.empty or not vs:
-        return m
+        return {}
     d = df.sort_values("Strike").reset_index(drop=True)
     atm = float(d.loc[(d["Strike"] - spot).abs().idxmin(), "Strike"])
     mx = {c: max(float(d[c].max()), 1.0) for c in ("Call Vol", "Call OI", "Put Vol", "Put OI")}
@@ -1956,44 +1961,59 @@ def zone_marks(ana, df, spot):
         pv, po = pcts(row, side)
         return (max(pv, po) >= 75) if inner else (pv >= 75 and po >= 75)
 
-    def numbered(entries, letter, color, extra_zone1):
-        entries = sorted(entries, key=lambda e: e[0])          # market price ke paas se
-        for i, (_, k, tag, is_z1) in enumerate(entries):
-            name = letter if len(entries) == 1 else f"{letter}{i + 1}"
-            ex = extra_zone1 if is_z1 else ""
-            m[fs(k)] = {"bg": color[0], "fg": "#ffffff", "numfg": "#ffffff", "txt": f"{color[1]} {name} - {tag}{ex}"}
+    sup_map, res_map = {}, {}                                    # strike -> (label, bg)
+
+    def numbered(entries, letter, word, bg, extra_zone1, target):
+        z1 = [e for e in entries if e[3]]
+        others = sorted([e for e in entries if not e[3]], key=lambda e: e[0])
+        for _, k, tag, _ in z1:
+            target[fs(k)] = (word + extra_zone1, bg)                 # zone 1: SUPPORT / RESISTANCE
+        for i, (_, k, tag, _) in enumerate(others):
+            label = tag if len(others) == 1 else f"{tag} {i + 1}"   # ek hi ho to WTT, ek se zyada ho to WTT 1, WTT 2 ...
+            target[fs(k)] = (label, bg)
 
     if vs.get("demand"):
         s1 = float(vs["demand"][0]["primary"]["strike"])
-        entries = [(abs(s1 - atm), s1, "WTT", True)]          # zone 1 (support)
+        entries = [(abs(s1 - atm), s1, "WTT", True)]
         for _, r in d.iterrows():
             k = float(r["Strike"])
             if k == s1 or k > atm:
                 continue
-            if k > s1:                                        # zone 1 aur ATM ke beech (paas)
+            if k > s1:
                 if ok_2(r, "Put", True):
                     entries.append((abs(k - atm), k, "WTT", False))
-            else:                                             # zone 1 se neeche (door)
+            else:
                 if ok_2(r, "Put", False):
                     entries.append((abs(k - atm), k, "WTB", False))
         extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
-        numbered(entries, "S", ("#15803d", "🟢"), extra)
+        numbered(entries, "S", "SUPPORT", "#15803d", extra, sup_map)
 
     if vs.get("supply"):
         r1 = float(vs["supply"][0]["primary"]["strike"])
-        entries = [(abs(r1 - atm), r1, "WTB", True)]          # zone 1 (resistance)
+        entries = [(abs(r1 - atm), r1, "WTB", True)]
         for _, r in d.iterrows():
             k = float(r["Strike"])
             if k == r1 or k < atm:
                 continue
-            if k < r1:                                        # ATM aur zone 1 ke beech (paas)
+            if k < r1:
                 if ok_2(r, "Call", True):
                     entries.append((abs(k - atm), k, "WTB", False))
-            else:                                             # zone 1 se aage (door)
+            else:
                 if ok_2(r, "Call", False):
                     entries.append((abs(k - atm), k, "WTT", False))
         extra = f" · {st_txt.get(pr['resistance']['state'], '')}" if same else ""
-        numbered(entries, "R", ("#b91c1c", "🔴"), extra)
+        numbered(entries, "R", "RESISTANCE", "#b91c1c", extra, res_map)
+
+    m = {}
+    for key in set(sup_map) | set(res_map):
+        sup = sup_map.get(key)
+        res = res_map.get(key)
+        if sup and res:
+            m[key] = {"dual": [(f"🔴 {res[0]}", "#b91c1c"), (f"🟢 {sup[0]}", "#15803d")], "fg": "#ffffff", "numfg": "#ffffff", "txt": ""}
+        else:
+            lab, bg = sup or res
+            icon = "🟢" if bg == "#15803d" else "🔴"
+            m[key] = {"bg": bg, "fg": "#ffffff", "numfg": "#ffffff", "txt": f"{icon} {lab}"}
     return m
 
 
