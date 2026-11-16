@@ -1134,6 +1134,15 @@ function spread(ys, gap){
 function f1(x){ return x.toFixed(1); }
 
 var obOnly = false;
+function obFit(){
+  var zz = obOnly ? D.zones.filter(function(z){ return z.short === 'OB'; }) : D.zones;
+  var lo = Infinity, hi = -Infinity;
+  D.c.forEach(function(c){ if (c[2] < lo) lo = c[2]; if (c[1] > hi) hi = c[1]; });
+  zz.forEach(function(z){ if (z.lo < lo) lo = z.lo; if (z.hi > hi) hi = z.hi; });
+  if (!isFinite(lo) || !isFinite(hi)) return null;
+  var pad = (hi - lo) * 0.04 || 5;
+  return [lo - pad, hi + pad];
+}
 function drawPrice(){
   var ZS = obOnly ? D.zones.filter(function(z){ return z.short === 'OB'; }) : D.zones;
   var a = view.a, b = view.b, lo = view.lo, hi = view.hi, span = b - a, slot = pw / span, rng = hi - lo;
@@ -1315,9 +1324,9 @@ document.getElementById('zp').addEventListener('wheel', function(e){
 function reset(){ view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DEF.hi; sel = -1; info.textContent = HINT; persist(true); draw(); }
 document.getElementById('zrs').addEventListener('click', reset);
 var zall = document.getElementById('zall');
-if (zall) zall.addEventListener('click', function(){ if (D) { view.lo = D.flo; view.hi = D.fhi; changed(); } });
+if (zall) zall.addEventListener('click', function(){ if (D) { var r = obOnly ? obFit() : null; view.lo = r ? r[0] : D.flo; view.hi = r ? r[1] : D.fhi; changed(); } });
 var zob = document.getElementById('zob');
-if (zob) zob.addEventListener('click', function(){ obOnly = !obOnly; zob.textContent = obOnly ? '🟦 OB ✓' : '🟦 OB'; draw(); });
+if (zob) zob.addEventListener('click', function(){ obOnly = !obOnly; zob.textContent = obOnly ? '🟦 OB ✓' : '🟦 OB'; var r = obOnly ? obFit() : null; if (r) { view.lo = r[0]; view.hi = r[1]; } else if (D) { view.lo = D.flo; view.hi = D.fhi; } changed(); });
 var zm = document.getElementById('zm'), zp = document.getElementById('zp'), zoomOn = true;
 try { var o1 = JSON.parse(window.name || '{}') || {}; if (o1.zm === 0) zoomOn = false; } catch(e) {}
 function applyMode(){
