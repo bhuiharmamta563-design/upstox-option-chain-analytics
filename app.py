@@ -432,6 +432,78 @@ def pct_s(x):
     return (str(int(v)) + "%") if v == int(v) else ("%.1f" % v + "%")
 
 
+def iv_max_info(df, spot, n):
+    """Option chain ke view (ATM +- n) mein sabse zyada IV wala strike (Call ya Put IV)."""
+    d = df.sort_values("Strike").reset_index(drop=True)
+    if "Call IV" not in d.columns or "Put IV" not in d.columns:
+        return None
+    ai = int((d["Strike"] - spot).abs().idxmin())
+    view = d.iloc[max(ai - n, 0): ai + n + 1].copy()
+    view["iv"] = view[["Call IV", "Put IV"]].astype(float).max(axis=1)
+    if view["iv"].isna().all():
+        return None
+    r = view.loc[view["iv"].idxmax()]
+    return {"strike": float(r["Strike"]), "iv": float(r["iv"])}
+
+
+def build_rv(df, spot, n):
+    """Realized volatility per strike (Call aur Put): pichle window (9:17 se ab tak) mein (high-low) / avg close ka %."""
+    d = df.sort_values("Strike").reset_index(drop=True)
+    ai = int((d["Strike"] - spot).abs().idxmin())
+    view = d.iloc[max(ai - n, 0): ai + n + 1]
+    keys = [k for k in list(view["Call Key"]) + list(view["Put Key"]) if isinstance(k, str) and k]
+    if not keys:
+        return {"error": "Option ke instrument key nahi mile."}
+    hist, errs = {}, []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for key, h, e in ex.map(fetch_option_hist, keys):
+            if h is not None:
+                hist[key] = h
+            else:
+                errs.append(e)
+    if not hist:
+        return {"error": "Option ki history nahi aayi. Upstox ka jawab: " + (errs[0] if errs else "khali")}
+    end_t = max(h["time"].max() for h in hist.values()).time()
+    if end_t > dt_time(15, 30):
+        end_t = dt_time(15, 30)
+    rows = []
+    for _, r in view.iterrows():
+        for side, col in (("Call", "Call Key"), ("Put", "Put Key")):
+            h = hist.get(r.get(col))
+            if h is None or h.empty:
+                continue
+            tm = h["time"].dt.time
+            w = h[(tm >= PRESS_START) & (tm <= end_t)]
+            if w.empty or float(w["c"].mean()) <= 0:
+                continue
+            rv = (float(w["h"].max()) - float(w["l"].min())) / float(w["c"].mean()) * 100
+            rows.append({"Strike": float(r["Strike"]), "Side": side, "RV %": round(rv, 2)})
+    if not rows:
+        return {"error": "Volatility nikalne ke liye data kam hai. Market khulne ke baad dobara dabayein."}
+    res = pd.DataFrame(rows).sort_values("RV %", ascending=False).reset_index(drop=True)
+    return {"table": res, "end_label": end_t.strftime("%H:%M")}
+
+
+def volatility_zone_alert(rv_res, iv_info, breaches, step):
+    """Combined alert: sabse zyada RV (ya IV) wala strike kisi TOOTE zone ke andar / paas ho to alert."""
+    if not breaches:
+        return None
+    cands = []
+    if rv_res and rv_res.get("table") is not None and len(rv_res["table"]):
+        top = rv_res["table"].iloc[0]
+        cands.append(("RV", float(top["Strike"]), float(top["RV %"])))
+    if iv_info:
+        cands.append(("IV", float(iv_info["strike"]), float(iv_info["iv"])))
+    lines = []
+    for b in breaches:
+        for kind, k, v in cands:
+            if float(b["low"]) - step <= k <= float(b["high"]) + step:
+                lines.append(f"{kind} {fs(k)} ({v:.1f}%) · {b['short']} toota ({b['dir']})")
+    if not lines:
+        return None
+    return "⚠️ Volatility + zone break: " + " | ".join(lines) + ". Ye sirf jaankari hai, trade ki salah nahi."
+
+
 def fmt_vol(v):
     v = v or 0
     if v >= 10000000:
@@ -1579,7 +1651,7 @@ def fetch_option_hist(key):
         c = pd.DataFrame(cs).iloc[:, :7]
         c.columns = ["time", "o", "h", "l", "c", "vol", "oi"]
         c["time"] = pd.to_datetime(c["time"], utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
-        return key, c[["time", "vol", "oi"]].sort_values("time").reset_index(drop=True), ""
+        return key, c[["time", "vol", "oi", "h", "l", "c"]].sort_values("time").reset_index(drop=True), ""
     except Exception as e:
         return key, None, str(e)[:80]
 
@@ -2098,6 +2170,9 @@ def render_table(df, spot, n, ana, show_summary, label, height):
     components.html(table_shell_html(), height=height, scrolling=True)
     vm = st.session_state.get("vmatrix") or {}
     vm_txt = vm.get("label") if (vm and vm.get("inst") == inst_name and vm.get("exp") == expiry_date and not vm.get("error")) else None
+    _iv = iv_max_info(df, spot, n)
+    if _iv:
+        vm_txt = " · ".join(x for x in [vm_txt, f"IV max {fs(_iv['strike'])} ({_iv['iv']:.1f}%)"] if x)
     components.html(push_html("table", {"html": build_table_body(df, spot, n, ana, show_summary, label, current_shift(), zone_marks(ana, df, spot), vm_txt)}), height=0)
 
 
@@ -2192,6 +2267,12 @@ def render_page():
         _br = st.session_state.get("breaches") or []
         if _br:
             st.markdown(breach_banner_html(_br), unsafe_allow_html=True)
+            _rv = st.session_state.get("rv") or {}
+            _rv = _rv if (_rv.get("inst") == inst_name and _rv.get("exp") == expiry_date and not _rv.get("error")) else None
+            _step = float(pd.Series(sorted(df["Strike"].astype(float).unique())).diff().dropna().min() or 50.0)
+            _alert = volatility_zone_alert(_rv, iv_max_info(df, spot, n_strikes), _br, _step)
+            if _alert:
+                st.warning(_alert)
         st.markdown(
             f'<div style="background:{bias_col};color:#111;padding:14px;border-radius:10px;font-size:18px;">'
             f'<b>Market Bias: {ana["bias"]}</b> &nbsp;|&nbsp; Score: {ana["points"]:+d} &nbsp;|&nbsp; PCR: {ana["pcr"]:.2f}'
@@ -2200,10 +2281,23 @@ def render_page():
         )
         st.write("")
 
-        bc1, bc2, bc3 = st.columns(3)
+        bc1, bc2, bc3, bc4 = st.columns(4)
         pr_click = bc1.button("🧭 Pressure matrix (9:17 se ab tak)")
         vm_click = bc2.button("📋 Volume matrix (9:17 se ab tak)")
-        ai_click = bc3.button("🤖 AI summary (Gemini / Claude)")
+        rv_click = bc3.button("📈 Volatility (9:17 se ab tak)")
+        ai_click = bc4.button("🤖 AI summary (Gemini / Claude)")
+        if rv_click:
+            with st.spinner("Volatility nikal raha hoon..."):
+                st.session_state["rv"] = {"inst": inst_name, "exp": expiry_date, **build_rv(df, spot, n_strikes)}
+        rv = st.session_state.get("rv")
+        if rv and rv.get("inst") == inst_name and rv.get("exp") == expiry_date:
+            if rv.get("error"):
+                st.warning(rv["error"])
+            else:
+                top3 = rv["table"].head(3)
+                st.markdown("📈 **Realized volatility** (9:17–" + rv["end_label"] + ") · sabse zyada: " +
+                            " | ".join(f"{fs(r['Strike'])} {r['Side']} {r['RV %']:.2f}%" for _, r in top3.iterrows()))
+                st.dataframe(rv["table"].head(10), hide_index=True, use_container_width=True)
         if pr_click:
             with st.spinner("Pressure nikal raha hoon (option ki history)..."):
                 st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
