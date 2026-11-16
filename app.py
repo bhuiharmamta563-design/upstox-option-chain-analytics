@@ -2177,10 +2177,16 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
-    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones"], horizontal=True, label_visibility="collapsed")
+    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones", "🟦 OB Chart"], horizontal=True, label_visibility="collapsed")
     vol_mode = view.startswith("📊 Volume")
-    zv_flag, zo_flag = (True, False) if vol_mode else (show_vol_zones, show_oi_zones)
-    if view.startswith("📈") or vol_mode:
+    ob_mode = view.startswith("🟦")
+    if vol_mode:
+        zv_flag, zo_flag = True, False
+    elif ob_mode:
+        zv_flag, zo_flag = False, False          # OB chart: sirf OB BULL / OB BEAR, S/R zones nahi
+    else:
+        zv_flag, zo_flag = show_vol_zones, show_oi_zones
+    if view.startswith("📈") or vol_mode or ob_mode:
         tl_col, tr_col = st.columns([1, 3])
         tl_col.markdown("**Timeframe**")
         tf = tr_col.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min", label_visibility="collapsed")
