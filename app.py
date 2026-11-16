@@ -170,8 +170,11 @@ st.sidebar.header("Settings")
 expiry_date = st.sidebar.selectbox("Select Expiry Date", expiry_options)
 n_strikes = st.sidebar.slider("ATM ke upar/niche strikes", 5, 30, 10)
 show_summary = st.sidebar.checkbox("Strike ke baad PCR / Zone dikhao", value=True)
-zone_pts = st.sidebar.number_input("Zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
-                                   help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points, BankNifty ~83, Sensex ~130). Apni marzi ke points bhi likh sakte hain. Sab zone isi chaudai ke hote hain.")
+zone_pts_s = st.sidebar.number_input("Supply zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
+                                     help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points). Apni marzi ke points bhi likh sakte hain.")
+zone_pts_d = st.sidebar.number_input("Demand zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
+                                     help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points). Apni marzi ke points bhi likh sakte hain.")
+zone_pts = {"supply": zone_pts_s, "demand": zone_pts_d}
 show_vol_zones = st.sidebar.checkbox("📊 Volume zones chart par dikhao", value=True)
 show_oi_zones = st.sidebar.checkbox("📈 OI zones chart par dikhao", value=True)
 focus_mode = st.sidebar.checkbox("📺 Focus mode (sirf option chain)", value=False)
@@ -258,9 +261,15 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
     step = float(diffs.min()) if len(diffs) else 50.0          # strike gap (Nifty 50, BankNifty 100, stock 2.5...)
 
     # Zone ki chaudai (points): user ne di ho to wahi, warna auto = spot ka 0.16% (Nifty par ~40 points)
-    w = float(zone_pts) if zone_pts and zone_pts > 0 else float(spot) * 0.0016
-    w = round(w) if w >= 1 else round(w, 2)
-    w = max(w, 0.01)
+    def _w_of(v):
+        w_ = float(v) if v and v > 0 else float(spot) * 0.0016
+        w_ = round(w_) if w_ >= 1 else round(w_, 2)
+        return max(w_, 0.01)
+    if isinstance(zone_pts, dict):
+        w_side = {"supply": _w_of(zone_pts.get("supply")), "demand": _w_of(zone_pts.get("demand"))}
+    else:
+        w_side = {"supply": _w_of(zone_pts), "demand": _w_of(zone_pts)}
+    w = w_side["supply"]
     half = w / 2
     colmax = {c: max(float(d[c].max()), 1.0) for c in ("Call OI", "Put OI", "Call Vol", "Put Vol")}
 
@@ -270,11 +279,13 @@ def analyze(df, spot, zone_pts=0.0, prev=None):
         k = float(row["Strike"])
         pct = float(row[f"{c} {base}"]) / colmax[f"{c} {base}"] * 100      # poori chain ke sabse zyada ka kitna %
         chg = float(row[f"{c} OI Chg"])
+        wz = w_side[side] if pct >= 60 else w_side[side] * 0.5    # side ki chaudai; 60% se neeche: aadha
+        hz = wz / 2
         z = {
             "basis": basis, "side": side, "rank": rank, "strike": fs(k), "pct": pct,
             "primary": {"strike": fs(k), "score": pct, "oi": float(row[f"{c} OI"]),
                         "vol": float(row[f"{c} Vol"]), "chg": chg, "fresh": chg > 0},
-            "low": round(k - half, 2), "high": round(k + half, 2), "width": w,     # strike ke aas-paas w points ki patti
+            "low": round(k - hz, 2), "high": round(k + hz, 2), "width": wz,     # strike ke aas-paas wz points ki patti
         }
         z["dist"] = (z["low"] - spot) if side == "supply" else (spot - z["high"])  # spot se kitne points door
         return z
