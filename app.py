@@ -1133,7 +1133,9 @@ function spread(ys, gap){
 }
 function f1(x){ return x.toFixed(1); }
 
+var obOnly = false;
 function drawPrice(){
+  var ZS = obOnly ? D.zones.filter(function(z){ return z.short === 'OB'; }) : D.zones;
   var a = view.a, b = view.b, lo = view.lo, hi = view.hi, span = b - a, slot = pw / span, rng = hi - lo;
   function Y(v){ return T + (hi - v) / rng * ph; }
   function X(i){ return L + (i - a + 0.5) * slot; }
@@ -1146,7 +1148,7 @@ function drawPrice(){
     v += step;
   }
   var zl = [];
-  D.zones.forEach(function(z){
+  ZS.forEach(function(z){
     var y1 = Y(z.hi), y2 = Y(z.lo);
     cl.push('<rect x="' + L + '" y="' + f1(y1) + '" width="' + pw + '" height="' + f1(Math.max(y2 - y1, 2)) + '" fill="' + z.color + '" opacity="' + z.alpha + '"/>');
     [y1, y2].forEach(function(yy){ cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(yy) + '" y2="' + f1(yy) + '" stroke="' + z.color + '" stroke-width="1" opacity="0.55"/>'); });
@@ -1166,7 +1168,7 @@ function drawPrice(){
     cl.push('<text x="' + (L + 6) + '" y="' + f1(Math.min(zy[k], T + ph - 3)) + '" font-size="11" font-weight="700" fill="' + (q[0].side === 'supply' ? '#b91c1c' : '#15803d') + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + q[0].main + (q[0].sec ? '<tspan fill="' + q[0].seccol + '">' + q[0].sec + '</tspan>' : '') + '</text>');
   });
   var secSeen = {};
-  D.zones.forEach(function(z){
+  ZS.forEach(function(z){
     if (z.secK === null || z.secK === undefined || !z.secT) return;
     var key = z.secK + '|' + z.seccol; if (secSeen[key]) return; secSeen[key] = 1;
     var ys = Y(z.secK);
@@ -1183,7 +1185,7 @@ function drawPrice(){
     if (y < T) { y = T + 9; arrow = '\u25B2 '; } else if (y > T + ph) { y = T + ph - 9; arrow = '\u25BC '; }
     return {l: l, y: y, t: arrow + l.lab};
   });
-  D.zones.forEach(function(z){                       // screen se bahar ke zone ka tag (▲ / ▼)
+  ZS.forEach(function(z){                       // screen se bahar ke zone ka tag (▲ / ▼)
     var yc = Y((z.lo + z.hi) / 2);
     if (yc < T || yc > T + ph) tg.push({l: {color: z.color}, y: yc < T ? T + 9 : T + ph - 9, t: (yc < T ? '\u25B2 ' : '\u25BC ') + z.short});
   });
@@ -1215,7 +1217,7 @@ function drawOI(){
     t += step;
   }
   var zt = [];
-  D.zones.forEach(function(z, zi){
+  ZS.forEach(function(z, zi){
     var x1 = Math.max(L, XS(z.a) - slot / 2), x2 = Math.min(L + pw, XS(z.b) + slot / 2);
     if (x2 <= x1) return;
     cl.push('<rect x="' + f1(x1) + '" y="' + T + '" width="' + f1(x2 - x1) + '" height="' + ph + '" fill="' + z.color + '" opacity="' + z.alpha + '"/>' +
@@ -1314,6 +1316,8 @@ function reset(){ view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DE
 document.getElementById('zrs').addEventListener('click', reset);
 var zall = document.getElementById('zall');
 if (zall) zall.addEventListener('click', function(){ if (D) { view.lo = D.flo; view.hi = D.fhi; changed(); } });
+var zob = document.getElementById('zob');
+if (zob) zob.addEventListener('click', function(){ obOnly = !obOnly; zob.textContent = obOnly ? '🟦 OB ✓' : '🟦 OB'; draw(); });
 var zm = document.getElementById('zm'), zp = document.getElementById('zp'), zoomOn = true;
 try { var o1 = JSON.parse(window.name || '{}') || {}; if (o1.zm === 0) zoomOn = false; } catch(e) {}
 function applyMode(){
@@ -1420,7 +1424,7 @@ def zoom_shell_html(kind):
         '<div class="btns"><button id="zin" class="g" title="Zoom in">＋</button><button id="zout" class="g" title="Zoom out">－</button>'
         '<button id="zrs" class="g" title="Reset">⟲</button>'
         + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
-        + '<button id="zm" class="g">✋ Zoom</button><button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
+        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="zob" class="g" title="Sirf OB BULL / OB BEAR dikhao">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
         f'<div id="info">{hint}</div><div id="wait">Chart load ho raha hai…</div>'
         '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
         f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:{svgbg};display:block"></svg>'
