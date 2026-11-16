@@ -1349,6 +1349,39 @@ def zoom_shell_html(kind):
     return DARK_CSS + html + ZOOM_JS.replace("__CFG__", json.dumps(cfg)) + FS_JS + SCROLL_JS
 
 
+def detect_ob(c, mult=1.5, keep=3):
+    """Order block (anumaan, pakka nahi): strong candle (body > mult x average body) ke PEHLE ki aakhri ulti candle.
+    Strong upar ki candle -> bullish OB = pehli laal candle; strong neeche ki candle -> bearish OB = pehli hari candle.
+    Sirf aakhri 'keep' OB."""
+    c = c.reset_index(drop=True)
+    o = c["open"].astype(float)
+    h = c["high"].astype(float)
+    l = c["low"].astype(float)
+    cl = c["close"].astype(float)
+    body = (cl - o).abs()
+    avg = body.rolling(20, min_periods=5).mean().shift(1)
+    out = []
+    for i in range(len(c)):
+        a = avg.iloc[i]
+        if not (a == a) or a <= 0 or body.iloc[i] <= mult * a:
+            continue
+        want_bull = cl.iloc[i] > o.iloc[i]
+        for j in range(i - 1, max(-1, i - 11), -1):
+            if want_bull and cl.iloc[j] < o.iloc[j]:
+                out.append(("bull", float(l.iloc[j]), float(h.iloc[j])))
+                break
+            if (not want_bull) and cl.iloc[j] > o.iloc[j]:
+                out.append(("bear", float(l.iloc[j]), float(h.iloc[j])))
+                break
+    seen, uniq = set(), []
+    for x in out:
+        k = (x[0], round(x[1], 2), round(x[2], 2))
+        if k not in seen:
+            seen.add(k)
+            uniq.append(x)
+    return uniq[-keep:]
+
+
 def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None, legacy=False):
     items, lines = zone_items(ana, show_vol, show_oi, breached, legacy), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
@@ -1362,6 +1395,13 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
     if fit_all:
         lo, hi = flo, fhi
     rows = list(c.reset_index(drop=True).itertuples())
+    ob_zones = []
+    if legacy:                                             # sirf Price + Zones mein OB (anumaan)
+        for kind, lo_, hi_ in detect_ob(c):
+            bull = kind == "bull"
+            ob_zones.append({"label": "", "main": "OB " + ("BULL" if bull else "BEAR"), "sec": "", "seccol": "",
+                             "secK": None, "secT": "", "short": "OB", "side": "demand" if bull else "supply",
+                             "lo": lo_, "hi": hi_, "color": "#3b82f6" if bull else "#a855f7", "alpha": 0.12})
     return {
         "sig": sig, "n": len(rows),
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
@@ -1369,7 +1409,7 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
         "zones": [{"label": i["label"], "main": i.get("main", i["label"]), "sec": i.get("sec", ""), "seccol": i.get("seccol", ""),
                    "secK": i.get("secK"), "secT": i.get("secT", ""),
-                   "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items],
+                   "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items] + ob_zones,
         "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
     }
@@ -1984,8 +2024,22 @@ def zone_marks(ana, df, spot):
             label = tag if len(others) == 1 else f"{tag} {i + 1}"   # ek hi ho to WTT, ek se zyada ho to WTT 1, WTT 2 ...
             target[fs(k)] = (label, bg)
 
-    if vs.get("demand"):
-        s1 = float(vs["demand"][0]["primary"]["strike"])
+    def pick_z1(side):
+        """Zone 1 = Volume wala ya OI wala zone, jo bhi samne (strike par) zyada % ka ho."""
+        cols = "Put" if side == "demand" else "Call"
+        opts = []
+        for basis in ("vol", "oi"):
+            zl = (ana or {}).get("zone_sets", {}).get(basis, {}).get(side) or []
+            if zl:
+                k = float(zl[0]["primary"]["strike"])
+                rows_k = d[d["Strike"] == k]
+                if not rows_k.empty:
+                    pv, po = pcts(rows_k.iloc[0], cols)
+                    opts.append((round(max(pv, po), 6), -abs(k - spot), k))   # tie par market ke sabse paas wala
+        return max(opts)[2] if opts else None
+
+    s1 = pick_z1("demand")
+    if s1 is not None:
         entries = [(abs(s1 - atm), s1, "WTT", True)]
         for _, r in d.iterrows():
             k = float(r["Strike"])
@@ -2000,8 +2054,8 @@ def zone_marks(ana, df, spot):
         extra = f" · {st_txt.get(pr['support']['state'], '')}" if same else ""
         numbered(entries, "S", "SUPPORT", "#15803d", extra, sup_map)
 
-    if vs.get("supply"):
-        r1 = float(vs["supply"][0]["primary"]["strike"])
+    r1 = pick_z1("supply")
+    if r1 is not None:
         entries = [(abs(r1 - atm), r1, "WTB", True)]
         for _, r in d.iterrows():
             k = float(r["Strike"])
