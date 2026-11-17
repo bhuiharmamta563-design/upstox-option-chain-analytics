@@ -2404,14 +2404,16 @@ def render_page():
         # ---- Table ----
         st.markdown("---")
         st.subheader("📋 Complete Option Chain Matrix")
-        sc1, sc2, sc3 = st.columns([1, 1.4, 0.7])
-        cutoff_t = sc1.time_input("Samay", value=dt_time(9, 20), step=60, label_visibility="collapsed", help="Isse pehle ka data 'purana' mana jayega")
-        if sc2.button("🔀 Shifting dekho"):
-            with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
-                res = build_shift(df, spot, n_strikes, cutoff_t)
-            st.session_state["shift"] = {"inst": inst_name, "exp": expiry_date, **res}
-        if current_shift() and sc3.button("❌ Hatao"):
-            st.session_state["shift"] = None
+        _box = st.container(border=True)
+        with _box:
+            sc1, sc2, sc3 = st.columns([1, 1.4, 0.7])
+            cutoff_t = sc1.time_input("Samay", value=dt_time(9, 20), step=60, label_visibility="collapsed", help="Isse pehle ka data 'purana' mana jayega")
+            if sc2.button("🔀 Shifting dekho"):
+                with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
+                    res = build_shift(df, spot, n_strikes, cutoff_t)
+                st.session_state["shift"] = {"inst": inst_name, "exp": expiry_date, **res}
+            if current_shift() and sc3.button("❌ Hatao"):
+                st.session_state["shift"] = None
         sh_state = st.session_state.get("shift")
         if sh_state and sh_state.get("inst") == inst_name and sh_state.get("exp") == expiry_date:
             if sh_state.get("error"):
