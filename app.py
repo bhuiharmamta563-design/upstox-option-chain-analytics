@@ -795,7 +795,7 @@ TABLE_CSS = """
       .pb.top-red{color:#b91c1c;border-color:#f87171;background:#fef2f2;font-weight:700;}
       .pb.top-green{color:#166534;border-color:#22c55e;background:#dcfce7;font-weight:700;}
       .pb.hi{color:#6d28d9;border-color:#c4b5fd;background:#fff;font-weight:800;}
-      .pb.mid{color:#5b21b6;border-color:#a78bfa;background:#ede9fe;font-weight:700;}
+      .pb.mid{color:#0f172a;border-color:#0e7490;background:#ffffff;font-weight:900;}
       .pb.cy{color:#155e75;border-color:#22d3ee;background:#ecfeff;font-weight:700;}
       .sh{white-space:normal;font-size:11px;font-weight:600;letter-spacing:0;text-align:left;padding:5px 8px 3px 8px;line-height:1.55;color:#111;position:sticky;left:4px;width:min(360px,calc(100vw - 24px));box-sizing:border-box;}
       th.shmid{white-space:normal;font-size:10px;color:#6b7280;font-weight:700;}
