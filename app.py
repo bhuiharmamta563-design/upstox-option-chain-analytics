@@ -116,7 +116,7 @@ PAGE_LIGHT = """<style>
 [data-testid=stTickBarMin], [data-testid=stTickBarMax], [data-testid=stTickBar] {color:#374151 !important;}
 [data-testid=stRadio] label div p, [data-testid=stCheckbox] label p {color:#111111 !important;}
 </style>"""
-theme_pick = st.sidebar.radio("Theme", ["🌙 Dark", "☀️ Light"], horizontal=True, index=0)
+theme_pick = st.sidebar.radio("Theme", ["🌙 Dark", "☀️ Light"], horizontal=True, index=1)
 st.session_state["theme_dark"] = theme_pick.startswith("🌙")
 SIDEBAR_FIX = """<style>
 [data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"],
@@ -736,7 +736,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
 
 # ---------------- Charts with Supply / Demand zones (pure SVG, no extra library) ----------------
 def _dark():
-    return bool(st.session_state.get("theme_dark", True))
+    return bool(st.session_state.get("theme_dark", False))
 
 
 def _wc():
