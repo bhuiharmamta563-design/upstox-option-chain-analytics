@@ -536,9 +536,9 @@ def bar_cell(text, pct, bg, color, direction, top_cls):
             f'<td style="background-color:{HI_COLOR};color:#fff">'
             f'<div class="v">{text}</div><div class="pb hi">{pct_s(pct)}</div></td>'
         )
-    if pct >= 74.5:                                  # 75% se upar: saaf ek rang (bina bar ke)
+    if pct >= 74.5:                                  # 75% se upar: 60% wala hi rang, sirf % chhota bold
         return (
-            f'<td style="background-color:{MID_COLOR}">'
+            f'<td style="background-color:{CYAN_COLOR}">'
             f'<div class="v">{text}</div><div class="pb mid">{pct_s(pct)}</div></td>'
         )
     if pct >= 59.5:                                  # 60% se upar (Zone 2 ke layak)
@@ -2169,7 +2169,14 @@ def zone_marks(ana, df, spot):
                 if not rows_k.empty:
                     pv, po = pcts(rows_k.iloc[0], cols)
                     opts.append((round(max(pv, po), 6), -abs(k - spot), k))   # tie par market ke sabse paas wala
-        return max(opts)[2] if opts else None
+        if not opts:
+            return None
+        # Pehle market ke bilkul paas (3 strike ke andar) ka dekho: wahan 75%+ ho to wahi lo, door ka OI nahi
+        _stp = float(pd.Series(sorted(d["Strike"].astype(float).unique())).diff().dropna().min() or 50.0)
+        near_o = [o for o in opts if abs(o[2] - atm) <= 3 * _stp]
+        if near_o and max(o[0] for o in near_o) >= 75:
+            return max(near_o)[2]
+        return max(opts)[2]
 
     s1 = pick_z1("demand")
     if s1 is not None:
