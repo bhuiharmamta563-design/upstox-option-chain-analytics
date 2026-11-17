@@ -2234,8 +2234,7 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
-    view = st.radio("Chart chuno", ["📈 Price + Zones", "📊 OI + Zones", "📊 Volume + Zones", "🟦 OB Chart"], horizontal=True, label_visibility="collapsed")
-    mode = "oi" if view.startswith("📊 OI") else ("vol" if view.startswith("📊 Volume") else ("ob" if view.startswith("🟦") else "price"))
+    mode = "price"          # mode ab chart ke toolbar (Price / OI / Vol / OB) se badalta hai
     tl_col, tr_col = st.columns([1, 3])
     tl_col.markdown("**Timeframe**")
     tf = tr_col.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min", label_visibility="collapsed")
