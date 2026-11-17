@@ -2155,9 +2155,7 @@ def zone_marks(ana, df, spot):
         others = sorted([e for e in entries if not e[3]], key=lambda e: e[0])
         for _, k, tag, _ in z1:
             target[fs(k)] = (word + extra_zone1, bg)                 # zone 1: SUPPORT / RESISTANCE
-        for i, (_, k, tag, _) in enumerate(others):
-            label = tag if len(others) == 1 else f"{tag} {i + 1}"   # ek hi ho to WTT, ek se zyada ho to WTT 1, WTT 2 ...
-            target[fs(k)] = (label, bg)
+        # 75% wale extra strikes option chain mein nahi dikhte: sirf zone 1 (SUPPORT / RESISTANCE)
 
     def pick_z1(side):
         """Zone 1 = Volume wala ya OI wala zone, jo bhi samne (strike par) zyada % ka ho."""
