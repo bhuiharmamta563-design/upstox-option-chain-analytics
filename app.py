@@ -1146,7 +1146,9 @@ function spread(ys, gap){
 function f1(x){ return x.toFixed(1); }
 
 var obOnly = false;
-var MODE = 'price', DS = {price: null, vol: null, oi: null};
+var MODE = 'price', TF = 5, DS = {price: {}, vol: {}, oi: null};
+function getDS(m){ var k = modeKey(m); if (k === 'oi') return DS.oi; var bucket = (k === 'vol') ? DS.vol : DS.price; return (bucket && bucket[TF]) || null; }
+function markTFBtns(){ [1,5,15].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.style.outline = (t === TF) ? '2px solid #facc15' : 'none'; }); }
 function modeKey(m){ return (m === 'vol') ? 'vol' : (m === 'oi') ? 'oi' : 'price'; }
 function setOverlaysVisible(v){ ['zp','za','zt'].forEach(function(id){ var e = document.getElementById(id); if (e) e.style.display = v ? '' : 'none'; }); }
 function markModeBtns(){
@@ -1154,14 +1156,24 @@ function markModeBtns(){
   ['mP','mO','mV','mB'].forEach(function(id){ var e = document.getElementById(id); if (e) e.style.outline = (id === act) ? '2px solid #facc15' : 'none'; });
 }
 function switchMode(m){
-  var key = modeKey(m);
-  if (!DS[key]) return;
+  var nd = getDS(m);
+  if (!nd) return;
   MODE = m; obOnly = (m === 'ob');
-  D = DS[key]; n = D.n;
+  D = nd; n = D.n;
   DEF = {a: D.defA, b: D.defB, lo: D.lo, hi: D.hi};
   view = copyDef(); touched = false; sel = -1;
   setOverlaysVisible(m !== 'oi');
   markModeBtns();
+  draw();
+}
+function switchTF(t){
+  TF = t;
+  var nd = getDS(MODE);
+  if (!nd) return;
+  D = nd; n = D.n;
+  DEF = {a: D.defA, b: D.defB, lo: D.lo, hi: D.hi};
+  view = copyDef(); touched = false; sel = -1;
+  markTFBtns();
   draw();
 }
 function obFit(){
@@ -1299,7 +1311,7 @@ function drawOI(){
   svg.innerHTML = out.join('');
 }
 
-function draw(){ if (!D) return; if (MODE === 'oi') drawOI(); else drawPrice(); window.__view = view; window.__mode = MODE; }
+function draw(){ if (!D) return; if (MODE === 'oi') drawOI(); else drawPrice(); window.__view = view; window.__mode = MODE; window.__tf = TF; }
 function changed(){ clampView(); persist(false); draw(); }
 
 var P = {};
@@ -1352,11 +1364,13 @@ document.getElementById('zp').addEventListener('wheel', function(e){
 }, {passive: false});
 
 function reset(){ view.a = DEF.a; view.b = DEF.b; view.lo = DEF.lo; view.hi = DEF.hi; sel = -1; info.textContent = HINT; persist(true); draw(); }
-document.getElementById('zrs').addEventListener('click', reset);
+if (document.getElementById('zrs')) document.getElementById('zrs').addEventListener('click', reset);
 var zall = document.getElementById('zall');
 if (zall) zall.addEventListener('click', function(){ if (D) { var r = obOnly ? obFit() : null; view.lo = r ? r[0] : D.flo; view.hi = r ? r[1] : D.fhi; changed(); } });
 var MB = {mP:'price', mO:'oi', mV:'vol', mB:'ob'};
 Object.keys(MB).forEach(function(id){ var e = document.getElementById(id); if (e) e.addEventListener('click', function(){ switchMode(MB[id]); }); });
+[1,5,15].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.addEventListener('click', function(){ switchTF(t); }); });
+markTFBtns();
 var zm = document.getElementById('zm'), zp = document.getElementById('zp'), zoomOn = true;
 try { var o1 = JSON.parse(window.name || '{}') || {}; if (o1.zm === 0) zoomOn = false; } catch(e) {}
 function applyMode(){
@@ -1370,8 +1384,8 @@ zm.addEventListener('click', function(){
 });
 applyMode();
 stage.addEventListener('dblclick', reset);
-document.getElementById('zin').addEventListener('click', function(){ zoomX(0.7, (view.a + view.b) / 2); zoomY(0.7, (view.hi + view.lo) / 2); changed(); });
-document.getElementById('zout').addEventListener('click', function(){ zoomX(1 / 0.7, (view.a + view.b) / 2); zoomY(1 / 0.7, (view.hi + view.lo) / 2); changed(); });
+if (document.getElementById('zin')) document.getElementById('zin').addEventListener('click', function(){ zoomX(0.7, (view.a + view.b) / 2); zoomY(0.7, (view.hi + view.lo) / 2); changed(); });
+if (document.getElementById('zout')) document.getElementById('zout').addEventListener('click', function(){ zoomX(1 / 0.7, (view.a + view.b) / 2); zoomY(1 / 0.7, (view.hi + view.lo) / 2); changed(); });
 
 function layoutOverlays(){
   var pc = function(x, tot){ return (x / tot * 100).toFixed(3) + '%'; };
@@ -1405,15 +1419,15 @@ window.__cid = CFG.kind;
 window.__update = function(p){
   if (p.v === lastV) return;
   var first = (lastV === null); lastV = p.v;
+  if (p.price) DS.price = p.price;
   if (p.vol) DS.vol = p.vol;
   if (p.oi) DS.oi = p.oi;
-  DS.price = p.data;
   if (p.mode && p.mode !== MODE) {
     switchMode(p.mode);
   } else if (MODE === 'vol' || MODE === 'oi') {
-    var nd = DS[modeKey(MODE)]; if (nd) { D = nd; n = D.n; changed(); }
+    var nd = getDS(MODE); if (nd) { D = nd; n = D.n; changed(); }
   } else {
-    setData(p.data);
+    var nd2 = getDS(MODE); if (nd2) setData(nd2);
   }
   var w = document.getElementById('wait'); if (w) w.style.display = 'none';
   if (first && window.__restoreScroll) window.__restoreScroll();
@@ -1469,10 +1483,9 @@ def zoom_shell_html(kind):
     hint = "2 ungli pinch = zoom | khinchein = chart khiskao | Axis par khinchein = price/time zoom | tap = data | double tap = reset"
     html = (
         f'{css}<div id="oc" class="{_wc()}"><div class="top"><div></div>'
-        '<div class="btns"><button id="zin" class="g" title="Zoom in">＋</button><button id="zout" class="g" title="Zoom out">－</button>'
-        '<button id="zrs" class="g" title="Reset">⟲</button>'
+        '<div class="btns">'
         + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
-        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="mP" class="g" title="Price + Zones">📈 Price</button><button id="mO" class="g" title="OI bars">📊 OI</button><button id="mV" class="g" title="Volume zones">📊 Vol</button><button id="mB" class="g" title="Sirf OB BULL / OB BEAR">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
+        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="t1" class="g" title="1 minute">1m</button><button id="t5" class="g" title="5 minute">5m</button><button id="t15" class="g" title="15 minute">15m</button>' if kind == "price" else "") + ('<button id="mP" class="g" title="Price + Zones">📈 Price</button><button id="mO" class="g" title="OI bars">📊 OI</button><button id="mV" class="g" title="Volume zones">📊 Vol</button><button id="mB" class="g" title="Sirf OB BULL / OB BEAR">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
         f'<div id="info">{hint}</div><div id="wait">Chart load ho raha hai…</div>'
         '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
         f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:{svgbg};display:block"></svg>'
@@ -2234,46 +2247,45 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 
 
 def render_charts(df, spot, ana, n_strikes, height=440):
-    mode = "price"          # mode ab chart ke toolbar (Price / OI / Vol / OB) se badalta hai
-    tl_col, tr_col = st.columns([1, 3])
-    tl_col.markdown("**Timeframe**")
-    tf = tr_col.radio("Timeframe", [1, 5, 15], index=1, horizontal=True, format_func=lambda m: f"{m} min", label_visibility="collapsed")
+    mode = "price"          # mode aur timeframe ab chart ke toolbar (Price / OI / Vol / OB, 1m / 5m / 15m) se badalte hain
+    tf = 5                  # zone test ke liye default timeframe
     candles, src, err = fetch_candles(inst_key)
-    br = []
-    if not candles.empty:
-        br_c = resample_candles(candles, tf) if src == "intraday" else None
-        if br_c is not None:
-            br = breach_check(br_c, ana)
-    st.session_state["breaches"] = br
     if candles.empty:
         st.warning(
             "Candle data nahi mila, isliye sirf zones aur levels dikha raha hoon. "
             f"Upstox ka jawab: {err or 'khali'}"
         )
-        cdl = pd.DataFrame({"time": [pd.Timestamp("2000-01-01")], "open": [spot], "high": [spot],
-                            "low": [spot], "close": [spot], "volume": [0]})
-        xfmt, sig_ = "%H:%M", f"{inst_name}|fake"
-    else:
-        if src == "intraday":
-            cdl, xfmt = resample_candles(candles, tf), "%H:%M"
+    price_sets, vol_sets = {}, {}
+    for t_ in (1, 5, 15):
+        if candles.empty:
+            cdl = pd.DataFrame({"time": [pd.Timestamp("2000-01-01")], "open": [spot], "high": [spot],
+                                "low": [spot], "close": [spot], "volume": [0]})
+            xfmt, sig_ = "%H:%M", f"{inst_name}|fake|{t_}"
+            br = []
         else:
-            cdl, xfmt = candles, "%d %b %H:%M"
-        sig_ = f"{inst_name}|{tf}|{src}|{len(br)}"
-    price_data = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|p", False, show_vol_zones, show_oi_zones, br, True)
-    vol_data = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|v", False, True, False, br, False)
+            if src == "intraday":
+                cdl, xfmt = resample_candles(candles, t_), "%H:%M"
+                br_c = cdl
+                br = breach_check(br_c, ana)
+            else:
+                cdl, xfmt = candles, "%d %b %H:%M"
+                br = []
+            sig_ = f"{inst_name}|{t_}|{src}|{len(br)}"
+        if t_ == tf:
+            st.session_state["breaches"] = br
+        price_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|p", False, show_vol_zones, show_oi_zones, br, True)
+        vol_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|v", False, True, False, br, False)
     oi_data = oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
     prev_mode = st.session_state.get("_cmode")
     send_mode = mode if prev_mode != mode else None
     st.session_state["_cmode"] = mode
     components.html(zoom_shell_html("price"), height=height, scrolling=True)
-    components.html(push_html("price", {"data": price_data, "vol": vol_data, "oi": oi_data, "mode": send_mode}), height=0)
-    if mode == "oi":
-        st.caption("Laal bar = Call OI, Hara bar = Put OI. SUP1/SUP2 = Supply zones, DEM1/DEM2 = Demand zones, LIQ = Liquidity strike.")
+    components.html(push_html("price", {"price": price_sets, "vol": vol_sets, "oi": oi_data, "mode": send_mode}), height=0)
     zb_c1, zb_c2 = st.columns(2)
     if zb_c2.button("📊 Zone cards dekho / chhupao"):
         st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
     if zb_c1.button("📊 Zone price test (aaj ke candles par)"):
-        st.session_state["zbt"] = {"inst": inst_name, "rows": zone_backtest(candles if not candles.empty else cdl, ana, 12), "tf": tf}
+        st.session_state["zbt"] = {"inst": inst_name, "rows": zone_backtest(candles, ana, 12), "tf": tf}
     zb = st.session_state.get("zbt")
     if zb and zb["inst"] == inst_name:
         if zb["rows"]:
