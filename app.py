@@ -564,6 +564,17 @@ def plain_cell(text, bg, bold=False):
     return f'<td style="background-color:{bg};{w}">{text}</td>'
 
 
+def ltp_cell(ltp, bg, is_call, strike, spot):
+    """LTP ke neeche do label: 1) INT = Intrinsic, 2) TV = Time value (LTP - INT).
+    Call: INT = max(Spot - Strike, 0); Put: INT = max(Strike - Spot, 0). TV negative ho to '—'."""
+    intrinsic = max(float(spot) - float(strike), 0.0) if is_call else max(float(strike) - float(spot), 0.0)
+    tv = float(ltp) - intrinsic
+    tv_txt = f"TV {tv:.1f}" if tv >= 0 else "TV —"
+    return (f'<td style="background-color:{bg};font-weight:700;">{float(ltp):.2f}'
+            f'<div style="font-size:9px;font-weight:600;color:#64748b">INT {intrinsic:.1f}</div>'
+            f'<div style="font-size:9px;font-weight:600;color:#64748b">{tv_txt}</div></td>')
+
+
 def shift_analysis(view, hist, cutoff):
     """cutoff se pehle (jaise 9:20 tak) aur uske baad ka fark: volume kahan shift hua, OI kahan jama hua.
     view: chain ki rows (Strike, Call Key, Put Key); hist: {instrument_key: DataFrame[time, vol, oi]}"""
@@ -690,7 +701,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             f'<tr class="{"atm" if is_atm else ""}">'
             # CALLS: IV | LTP | OI Chg | OI | Volume  (Volume strike ke paas)
             + plain_cell(f'{r["Call IV"]:.1f}', cbg)
-            + plain_cell(f'{r["Call LTP"]:.2f}', cbg, True)
+            + ltp_cell(r["Call LTP"], cbg, True, s, spot)
             + chg_cell(r["Call OI Chg"], cbg)
             + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
             + bar_cell(fmt_vol(r["Call Vol"]), r["Call Vol"] / mx["Call Vol"] * 100, cbg, "rgba(251,146,60,.35)", "to left", "red")
@@ -702,7 +713,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             + bar_cell(fmt_vol(r["Put Vol"]), r["Put Vol"] / mx["Put Vol"] * 100, pbg, "rgba(96,165,250,.35)", "to right", "green")
             + bar_cell(f'{r["Put OI"] / 1e5:.1f}', r["Put OI"] / mx["Put OI"] * 100, pbg, "rgba(74,222,128,.6)", "to right", "green")
             + chg_cell(r["Put OI Chg"], pbg)
-            + plain_cell(f'{r["Put LTP"]:.2f}', pbg, True)
+            + ltp_cell(r["Put LTP"], pbg, False, s, spot)
             + zone_td
             + pcr_td
             + plain_cell(f'{r["Put IV"]:.1f}', pbg)
@@ -1147,6 +1158,8 @@ function f1(x){ return x.toFixed(1); }
 
 var obOnly = false;
 var MODE = 'price', TF = 5, DS = {price: {}, vol: {}, oi: null};
+var smcOn = false;
+var labOn = false;
 function getDS(m){ var k = modeKey(m); if (k === 'oi') return DS.oi; var bucket = (k === 'vol') ? DS.vol : DS.price; return (bucket && bucket[TF]) || null; }
 function markTFBtns(){ [1,5,15].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.style.outline = (t === TF) ? '2px solid #facc15' : 'none'; }); }
 function modeKey(m){ return (m === 'vol') ? 'vol' : (m === 'oi') ? 'oi' : 'price'; }
@@ -1186,7 +1199,9 @@ function obFit(){
   return [lo - pad, hi + pad];
 }
 function drawPrice(){
-  var ZS = obOnly ? D.zones.filter(function(z){ return z.short === 'OB'; }) : D.zones;
+  var ZS0 = obOnly ? D.zones.filter(function(z){ return z.short === 'OB'; }) : D.zones;
+  var ZS = smcOn ? ZS0 : ZS0.filter(function(z){ return ['FVG','PREM','DISC'].indexOf(z.short) < 0; });
+  var LN = smcOn ? D.lines : D.lines.filter(function(l){ return l.dash !== '4 3'; });
   var a = view.a, b = view.b, lo = view.lo, hi = view.hi, span = b - a, slot = pw / span, rng = hi - lo;
   function Y(v){ return T + (hi - v) / rng * ph; }
   function X(i){ return L + (i - a + 0.5) * slot; }
@@ -1226,12 +1241,12 @@ function drawPrice(){
     if (ys < T || ys > T + ph) return;
     cl.push('<text x="' + (L + 6) + '" y="' + f1(ys + 12) + '" font-size="10" font-weight="700" fill="' + z.seccol + '" stroke="' + HALO + '" stroke-width="3" paint-order="stroke">' + z.secT + '</text>');
   });
-  D.lines.forEach(function(l){
+  LN.forEach(function(l){
     var y = Y(l.val);
     cl.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + f1(y) + '" y2="' + f1(y) + '" stroke="' + l.color + '" stroke-width="1.4" stroke-dasharray="' + l.dash + '"/>');
   });
   out.push('<g clip-path="url(#cp)">' + cl.join('') + '</g>', ticks.join(''));
-  var tg = D.lines.map(function(l){
+  var tg = LN.map(function(l){
     var y = Y(l.val), arrow = '';
     if (y < T) { y = T + 9; arrow = '\u25B2 '; } else if (y > T + ph) { y = T + ph - 9; arrow = '\u25BC '; }
     return {l: l, y: y, t: arrow + l.lab};
@@ -1277,6 +1292,17 @@ function drawOI(){
     zt.push('<text x="' + f1(dem ? x2 : x1) + '" y="' + (T - 8 - (zi % 2) * 12) + '" font-size="10" font-weight="700" fill="' + z.color + '" text-anchor="' + (dem ? 'end' : 'start') + '">' + z.short + '</text>');
   });
   var i0 = Math.max(0, Math.floor(a) - 1), i1 = Math.min(n - 1, Math.ceil(b) + 1), bw = Math.min(Math.max(2, slot * 0.38), 30);
+  if (labOn) {
+    for (var li = i0; li <= i1; li++) {
+      var lx = X(li), cy = Y(D.call[li]), py = Y(D.put[li]);
+      if (D.clab) {
+        cl.push('<text x="' + f1(lx - bw / 2) + '" y="' + f1(Math.max(T + 9, cy - 16)) + '" font-size="8" font-weight="700" fill="#b91c1c" text-anchor="middle">' + D.clab[li][0] + '</text>' +
+                '<text x="' + f1(lx - bw / 2) + '" y="' + f1(Math.max(T + 18, cy - 6)) + '" font-size="8" font-weight="700" fill="#b91c1c" text-anchor="middle">' + D.clab[li][1] + '</text>');
+        cl.push('<text x="' + f1(lx + bw / 2) + '" y="' + f1(Math.max(T + 9, py - 16)) + '" font-size="8" font-weight="700" fill="#15803d" text-anchor="middle">' + D.plab[li][0] + '</text>' +
+                '<text x="' + f1(lx + bw / 2) + '" y="' + f1(Math.max(T + 18, py - 6)) + '" font-size="8" font-weight="700" fill="#15803d" text-anchor="middle">' + D.plab[li][1] + '</text>');
+      }
+    }
+  }
   for (var i = i0; i <= i1; i++) {
     var x = X(i);
     cl.push('<g><title>' + D.tips[i] + '</title>' +
@@ -1370,6 +1396,10 @@ if (zall) zall.addEventListener('click', function(){ if (D) { var r = obOnly ? o
 var MB = {mP:'price', mO:'oi', mV:'vol', mB:'ob'};
 Object.keys(MB).forEach(function(id){ var e = document.getElementById(id); if (e) e.addEventListener('click', function(){ switchMode(MB[id]); }); });
 [1,5,15].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.addEventListener('click', function(){ switchTF(t); }); });
+var zsmc = document.getElementById('zsmc');
+if (zsmc) zsmc.addEventListener('click', function(){ smcOn = !smcOn; zsmc.textContent = smcOn ? '🧩 SMC ✓' : '🧩 SMC'; draw(); });
+var zlab = document.getElementById('zlab');
+if (zlab) zlab.addEventListener('click', function(){ labOn = !labOn; zlab.textContent = labOn ? '🏷 INT/TV ✓' : '🏷 INT/TV'; draw(); });
 markTFBtns();
 var zm = document.getElementById('zm'), zp = document.getElementById('zp'), zoomOn = true;
 try { var o1 = JSON.parse(window.name || '{}') || {}; if (o1.zm === 0) zoomOn = false; } catch(e) {}
@@ -1485,7 +1515,7 @@ def zoom_shell_html(kind):
         f'{css}<div id="oc" class="{_wc()}"><div class="top"><div></div>'
         '<div class="btns">'
         + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
-        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="t1" class="g" title="1 minute">1m</button><button id="t5" class="g" title="5 minute">5m</button><button id="t15" class="g" title="15 minute">15m</button>' if kind == "price" else "") + ('<button id="mP" class="g" title="Price + Zones">📈 Price</button><button id="mO" class="g" title="OI bars">📊 OI</button><button id="mV" class="g" title="Volume zones">📊 Vol</button><button id="mB" class="g" title="Sirf OB BULL / OB BEAR">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
+        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="t1" class="g" title="1 minute">1m</button><button id="t5" class="g" title="5 minute">5m</button><button id="t15" class="g" title="15 minute">15m</button>' if kind == "price" else "") + ('<button id="zlab" class="g" title="OI chart par INT / TV labels">🏷 INT/TV</button><button id="zsmc" class="g" title="FVG, BOS/CHoCH, Premium/Discount dikhao ya chhupao">🧩 SMC</button><button id="mP" class="g" title="Price + Zones">📈 Price</button><button id="mO" class="g" title="OI bars">📊 OI</button><button id="mV" class="g" title="Volume zones">📊 Vol</button><button id="mB" class="g" title="Sirf OB BULL / OB BEAR">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
         f'<div id="info">{hint}</div><div id="wait">Chart load ho raha hai…</div>'
         '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
         f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:{svgbg};display:block"></svg>'
@@ -1530,6 +1560,56 @@ def detect_ob(c, mult=1.5, keep=3):
     return uniq[-keep:]
 
 
+def smc_items(c):
+    """SMC (Price mode): FVG zones, BOS/CHoCH lines, Premium/Discount zones. Simple rules, anumaan."""
+    c = c.reset_index(drop=True)
+    h = c["high"].astype(float).values
+    l = c["low"].astype(float).values
+    cl = c["close"].astype(float).values
+    n = len(c)
+    zones, lines = [], []
+    if n < 6:
+        return zones, lines
+    # FVG: teen candle ka gap; aakhri 4
+    fvgs = []
+    for i in range(2, n):
+        if l[i] > h[i - 2]:
+            fvgs.append({"lo": float(h[i - 2]), "hi": float(l[i]), "side": "demand", "lab": "FVG UP", "col": "#16a34a", "i": i})
+        elif h[i] < l[i - 2]:
+            fvgs.append({"lo": float(h[i]), "hi": float(l[i - 2]), "side": "supply", "lab": "FVG DOWN", "col": "#dc2626", "i": i})
+    for f in fvgs[-2:]:
+        zones.append({"label": "", "main": f["lab"], "sec": "", "seccol": "", "secK": None, "secT": "", "short": "FVG",
+                      "side": f["side"], "lo": f["lo"], "hi": f["hi"], "color": f["col"], "alpha": 0.10})
+    # BOS / CHoCH: confirmed swing (2 candle dono taraf) ke toot-ne par
+    trend, last_hi, last_lo, events = None, None, None, []
+    for j in range(n):
+        k = j - 2
+        if 2 <= k < n - 2:
+            if h[k] == max(h[k - 2:k + 3]):
+                last_hi = float(h[k])
+            if l[k] == min(l[k - 2:k + 3]):
+                last_lo = float(l[k])
+        if last_hi is not None and cl[j] > last_hi:
+            events.append(("CHoCH" if trend == "down" else "BOS", "UP", last_hi))
+            trend, last_hi = "up", None
+        if last_lo is not None and cl[j] < last_lo:
+            events.append(("CHoCH" if trend == "up" else "BOS", "DOWN", last_lo))
+            trend, last_lo = "down", None
+    for kind, d, v in events[-1:]:
+        col = "#16a34a" if d == "UP" else "#dc2626"
+        lines.append((f"{kind} {'↑' if d == 'UP' else '↓'}", float(v), col))
+    # Premium / Discount: pichhle 50 candles ki range
+    W = min(50, n)
+    H, L = float(max(h[-W:])), float(min(l[-W:]))
+    eq = (H + L) / 2
+    zones.append({"label": "", "main": "Premium", "sec": "", "seccol": "", "secK": None, "secT": "", "short": "PREM",
+                  "side": "supply", "lo": eq, "hi": H, "color": "#f87171", "alpha": 0.06})
+    zones.append({"label": "", "main": "Discount", "sec": "", "seccol": "", "secK": None, "secT": "", "short": "DISC",
+                  "side": "demand", "lo": L, "hi": eq, "color": "#4ade80", "alpha": 0.06})
+    lines.append(("EQ", eq, "#94a3b8"))
+    return zones, lines
+
+
 def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None, legacy=False):
     items, lines = zone_items(ana, show_vol, show_oi, breached, legacy), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
@@ -1550,6 +1630,9 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
             ob_zones.append({"label": "", "main": "OB " + ("BULL" if bull else "BEAR"), "sec": "", "seccol": "",
                              "secK": None, "secT": "", "short": "OB", "side": "demand" if bull else "supply",
                              "lo": lo_, "hi": hi_, "color": "#3b82f6" if bull else "#a855f7", "alpha": 0.12})
+    smc_zones, smc_lines = ([], [])
+    if legacy:
+        smc_zones, smc_lines = smc_items(c)
     return {
         "sig": sig, "n": len(rows),
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
@@ -1557,10 +1640,17 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
         "tips": [f"{r.time:%d %b %H:%M}  O {r.open:.2f}  H {r.high:.2f}  L {r.low:.2f}  C {r.close:.2f}" for r in rows],
         "zones": [{"label": i["label"], "main": i.get("main", i["label"]), "sec": i.get("sec", ""), "seccol": i.get("seccol", ""),
                    "secK": i.get("secK"), "secT": i.get("secT", ""),
-                   "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items] + ob_zones,
-        "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines],
+                   "short": i["short"], "side": i["key"], "lo": i["lo"], "hi": i["hi"], "color": i["color"], "alpha": i["alpha"]} for i in items] + ob_zones + smc_zones,
+        "lines": [{"lab": lab, "val": float(val), "color": col, "dash": "2 3" if lab.startswith("LIQ") else "5 4"} for lab, val, col in lines] + [{"lab": lab, "val": float(val), "color": col, "dash": "4 3"} for lab, val, col in smc_lines],
         "lo": lo, "hi": hi, "flo": flo, "fhi": fhi, "defA": max(0, len(rows) - 90), "defB": len(rows) + 1,
     }
+
+
+def _int_tv(ltp, strike, spot, is_call):
+    """(INT, TV) label pair: INT = intrinsic, TV = LTP - INT (negative ho to '—')."""
+    intr = max(float(spot) - float(strike), 0.0) if is_call else max(float(strike) - float(spot), 0.0)
+    tv = float(ltp) - intr
+    return [f"INT {intr:.0f}", f"TV {tv:.0f}" if tv >= 0 else "TV —"]
 
 
 def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True, metric="oi"):
@@ -1589,6 +1679,8 @@ def oi_chart_data(df, spot, n, ana, sig="", show_vol=True, show_oi=True, metric=
                  if metric == "vol" else
                  [f'{fs(r["Strike"])}  Call OI {r["Call OI"] / 1e5:.1f}L  Put OI {r["Put OI"] / 1e5:.1f}L' for _, r in v.iterrows()]),
         "zones": zones, "lines": lines, "lo": 0.0, "hi": ymax, "defA": 0, "defB": len(strikes),
+        "clab": [_int_tv(ltp, s_, spot, True) for ltp, s_ in zip(v["Call LTP"].tolist(), strikes)],
+        "plab": [_int_tv(ltp, s_, spot, False) for ltp, s_ in zip(v["Put LTP"].tolist(), strikes)],
     }
 
 
