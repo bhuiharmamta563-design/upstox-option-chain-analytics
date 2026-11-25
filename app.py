@@ -2523,6 +2523,14 @@ def render_charts(df, spot, ana, n_strikes, height=440):
     sp_, sv_ = structure_chart_sets(months_s, sw_on, bos_on)
     price_sets.update(sp_)
     vol_sets.update(sv_)
+    with st.expander("📅 Structure events (SH/SL, BOS, CHoCH)", expanded=False):
+        ev_df = structure_events_df(inst_key, months_s)
+        if ev_df.empty:
+            st.caption("Is range mein structure events nahi mile.")
+        else:
+            st.markdown(html_table(ev_df.head(40), _dark()), unsafe_allow_html=True)
+            st.download_button("⬇️ Structure events CSV", ev_df.to_csv(index=False).encode("utf-8"),
+                               file_name="structure_events.csv", mime="text/csv", key="dl_struct_ev")
     prev_mode = st.session_state.get("_cmode")
     send_mode = mode if prev_mode != mode else None
     st.session_state["_cmode"] = mode
@@ -2643,7 +2651,10 @@ def render_page():
                 top3 = rv["table"].head(3)
                 st.markdown("📈 **Realized volatility** (9:17–" + rv["end_label"] + ") · sabse zyada: " +
                             " | ".join(f"{fs(r['Strike'])} {r['Side']} {r['RV %']:.2f}%" for _, r in top3.iterrows()))
-                st.markdown(html_table(rv["table"].head(10), _dark()), unsafe_allow_html=True)
+                with st.expander("📈 Volatility table (top 10)", expanded=True):
+                    st.markdown(html_table(rv["table"].head(10), _dark()), unsafe_allow_html=True)
+                    st.download_button("⬇️ Volatility CSV", rv["table"].to_csv(index=False).encode("utf-8"),
+                                       file_name="volatility.csv", mime="text/csv", key="dl_rv")
         if pr_click and not is_past:
             with st.spinner("Pressure nikal raha hoon (option ki history)..."):
                 st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
@@ -2653,10 +2664,11 @@ def render_page():
         if same and pr.get("error"):
             st.warning(pr["error"])
         elif same:
-            st.markdown(f'<div style="background:#f5f3ff;color:#111;padding:10px;border-radius:8px">{pressure_html(pr)}</div>',
-                        unsafe_allow_html=True)
-            if pr["alert"]:
-                st.error("⚠️ Pressure result BEARISH hai. Chart par support zone par alert dikhega.")
+            with st.expander("🧭 Pressure matrix", expanded=True):
+                st.markdown(f'<div style="background:#f5f3ff;color:#111;padding:10px;border-radius:8px">{pressure_html(pr)}</div>',
+                            unsafe_allow_html=True)
+                if pr["alert"]:
+                    st.error("⚠️ Pressure result BEARISH hai. Chart par support zone par alert dikhega.")
         if vm_click and not is_past:
             with st.spinner("Volume trend nikal raha hoon..."):
                 st.session_state["vmatrix"] = {"inst": inst_name, "exp": expiry_date,
@@ -2666,8 +2678,9 @@ def render_page():
             if vm.get("error"):
                 st.warning(vm["error"])
             else:
-                st.markdown(f'<div style="background:#ecfdf5;color:#111;padding:10px;border-radius:8px">{volume_matrix_html(vm)}</div>',
-                            unsafe_allow_html=True)
+                with st.expander("📋 Volume matrix", expanded=True):
+                    st.markdown(f'<div style="background:#ecfdf5;color:#111;padding:10px;border-radius:8px">{volume_matrix_html(vm)}</div>',
+                                unsafe_allow_html=True)
         if ai_click:
             summary = {"instrument": inst_name, "spot": spot, "expiry": expiry_date, "bias": ana["bias"],
                        "pcr": round(ana["pcr"], 2), "max_pain": ana["max_pain"], "zone_width_points": ana["zone_width"],
@@ -2935,6 +2948,33 @@ def _flip_struct(key):
     st.session_state[key] = not st.session_state.get(key, True)
 
 
+@st.cache_data(ttl=600)
+def structure_events_df(inst_key, months):
+    """1 दिन aur 1 घंटा ke SH/SL, BOS, CHoCH events ek table mein (latest pehle)."""
+    today = date.today()
+    start = today - timedelta(days=31 * months + 5)
+    out = []
+    d = fetch_hist_range(inst_key, "day", start, today)
+    if not d.empty:
+        _z, _l, ev = daily_structure(d, pivot=2, keep=4)
+        out += [(t_, "1 दिन", k_, p_) for t_, k_, p_ in ev]
+    m = fetch_hist_range(inst_key, "30minute", start, today)
+    if not m.empty:
+        h1 = m.set_index("time").resample("60min", origin="start_day", offset="9h15min").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
+        if not h1.empty:
+            _z, _l, ev = daily_structure(h1, pivot=3, keep=4)
+            out += [(t_, "1 घंटा", k_, p_) for t_, k_, p_ in ev]
+    if not out:
+        return pd.DataFrame()
+    df = pd.DataFrame(out, columns=["Time", "TF", "Event", "Price"])
+    df["Time"] = pd.to_datetime(df["Time"])
+    df = df.sort_values("Time", ascending=False).reset_index(drop=True)
+    df["Time"] = df["Time"].dt.strftime("%d-%m-%Y %H:%M")
+    df["Price"] = df["Price"].round(2)
+    return df
+
+
 def render_structure_controls():
     """Chart ke upar: range (1M/2M/4M) aur structure lines ke toggles. 1H / 1D buttons chart ke toolbar mein hain."""
     st.session_state.setdefault("struct_months", 2)
@@ -3048,11 +3088,13 @@ def render_scanner():
               ("🟠 Breakdown ke paas", "Breakdown ke paas")]
     for title, status in groups:
         part = sdf[sdf["Status"] == status].sort_values("Vol x", ascending=False)
-        st.markdown(f"**{title}** · {len(part)} stock")
-        if len(part):
-            st.markdown(html_table(part, _dark()), unsafe_allow_html=True)
-        else:
-            st.caption("Koi nahi.")
+        with st.expander(f"{title} · {len(part)} stock", expanded=(len(part) > 0 and status in ("BREAKOUT", "BREAKDOWN"))):
+            if len(part):
+                st.markdown(html_table(part, _dark()), unsafe_allow_html=True)
+            else:
+                st.caption("Koi nahi.")
+    st.download_button("⬇️ Scanner CSV (sab stock)", sdf.to_csv(index=False).encode("utf-8"),
+                       file_name="scanner.csv", mime="text/csv", key="dl_scan")
 
 
 # Auto refresh: sirf data wala hissa dobara bante hai (fragment), poora page nahi, isliye screen smooth rehti hai
