@@ -125,7 +125,16 @@ SIDEBAR_FIX = """<style>
 }
 [data-testid="stHeader"] {display: flex !important; visibility: visible !important;}
 </style>"""
-st.markdown((PAGE_DARK if st.session_state["theme_dark"] else PAGE_LIGHT) + SIDEBAR_FIX, unsafe_allow_html=True)
+INPUT_CSS_LIGHT = """<style>
+div[data-baseweb="textarea"], div[data-baseweb="textarea"] > div {background:#ffffff !important;}
+div[data-baseweb="textarea"] textarea {background:#ffffff !important;color:#111827 !important;-webkit-text-fill-color:#111827 !important;}
+</style>"""
+INPUT_CSS_DARK = """<style>
+div[data-baseweb="textarea"], div[data-baseweb="textarea"] > div {background:#0f172a !important;}
+div[data-baseweb="textarea"] textarea {background:#0f172a !important;color:#e5e7eb !important;-webkit-text-fill-color:#e5e7eb !important;}
+</style>"""
+st.markdown((PAGE_DARK if st.session_state["theme_dark"] else PAGE_LIGHT) + SIDEBAR_FIX
+            + (INPUT_CSS_DARK if st.session_state["theme_dark"] else INPUT_CSS_LIGHT), unsafe_allow_html=True)
 st.sidebar.header("Instrument")
 kind = st.sidebar.radio("Type", ["Index", "Stock"], horizontal=True)
 if kind == "Index":
@@ -2614,7 +2623,7 @@ def render_page():
                 top3 = rv["table"].head(3)
                 st.markdown("📈 **Realized volatility** (9:17–" + rv["end_label"] + ") · sabse zyada: " +
                             " | ".join(f"{fs(r['Strike'])} {r['Side']} {r['RV %']:.2f}%" for _, r in top3.iterrows()))
-                st.dataframe(rv["table"].head(10), hide_index=True, use_container_width=True)
+                st.markdown(html_table(rv["table"].head(10), _dark()), unsafe_allow_html=True)
         if pr_click and not is_past:
             with st.spinner("Pressure nikal raha hoon (option ki history)..."):
                 st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
@@ -2930,9 +2939,31 @@ def render_daily_section():
         ev = pd.DataFrame(events, columns=["Time", "Event", "Price"]).sort_values("Time", ascending=False)
         ev["Time"] = pd.to_datetime(ev["Time"]).dt.strftime("%d-%m-%Y %H:%M" if tf_pick == "1 घंटा" else "%d-%m-%Y")
         st.markdown("**Events (latest pehle)**")
-        st.dataframe(ev.head(25), hide_index=True, use_container_width=True)
+        st.markdown(html_table(ev.head(25), _dark()), unsafe_allow_html=True)
     else:
         st.caption("Is range mein koi swing ya breakout/breakdown nahi mila.")
+
+
+def html_table(df, dark):
+    """Theme-aware HTML table (st.dataframe Streamlit ke system theme se chalta hai, isliye ye use karte hain)."""
+    import html as _h
+    fg = "#e5e7eb" if dark else "#111827"
+    head_bg = "#1e293b" if dark else "#eef2f7"
+    line = "#334155" if dark else "#e5e7eb"
+    def cell(v):
+        if v is None or (isinstance(v, float) and v != v):
+            return "—"
+        if isinstance(v, float):
+            return f"{v:,.2f}"
+        return _h.escape(str(v))
+    head = "".join(f"<th style='padding:5px 6px;text-align:right;background:{head_bg};font-size:11px;"
+                   f"border-bottom:1px solid {line}'>{_h.escape(str(c))}</th>" for c in df.columns)
+    rows = []
+    for _, r in df.iterrows():
+        tds = "".join(f"<td style='padding:5px 6px;text-align:right;border-bottom:1px solid {line}'>{cell(v)}</td>" for v in r.values)
+        rows.append(f"<tr>{tds}</tr>")
+    return (f"<div style='overflow-x:auto;color:{fg}'><table style='width:100%;border-collapse:collapse;font-size:12px;color:{fg}'>"
+            f"<thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
 
 
 def render_scanner():
@@ -2978,7 +3009,7 @@ def render_scanner():
         part = sdf[sdf["Status"] == status].sort_values("Vol x", ascending=False)
         st.markdown(f"**{title}** · {len(part)} stock")
         if len(part):
-            st.dataframe(part, hide_index=True, use_container_width=True)
+            st.markdown(html_table(part, _dark()), unsafe_allow_html=True)
         else:
             st.caption("Koi nahi.")
 
