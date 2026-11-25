@@ -194,8 +194,7 @@ def last_trading_days(n=5):
 
 chart_day = st.sidebar.selectbox("Chart date (trading din)", last_trading_days(5), index=0,
                                   format_func=lambda d_: d_.strftime("%d-%m-%Y (%a)"))
-past_time = st.sidebar.time_input("Past option chain samay", value=dt_time(11, 0), step=60,
-                                  help="Pichhli date chuni ho to us din ka option chain is samay tak dikhega")
+st.session_state.setdefault("past_t", dt_time(11, 0))   # pichhli date ka replay samay (page ke buttons se badalta hai)
 zone_pts_s = st.sidebar.number_input("Supply zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
                                      help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points). Apni marzi ke points bhi likh sakte hain.")
 zone_pts_d = st.sidebar.number_input("Demand zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
@@ -2202,6 +2201,7 @@ EMPTY_ANA = {"hist": True, "zone_sets": {"vol": {"supply": [], "demand": []}, "o
              "liq": [], "max_pain": None, "zone_width": 40, "step": 50}
 
 
+@st.cache_data(ttl=86400)
 def fetch_candles_for_day(inst_key, day):
     """Ek trading din ke 1-minute candles (Upstox historical-candle)."""
     key = enc(inst_key)
@@ -2461,9 +2461,9 @@ def render_charts(df, spot, ana, n_strikes, height=440):
     is_hist = chart_day != date.today()
     if is_hist:
         candles, src, err = fetch_candles_for_day(inst_key, chart_day)
-        ana = EMPTY_ANA
-        st.caption(f"📅 Historical {chart_day.strftime('%d-%m-%Y')}: sirf candles, OB, FVG, BOS, Premium/Discount. "
-                   "Support/Resistance zones aur OI us din ke option chain se bante hain, isliye wo yahan nahi dikhte.")
+        if not candles.empty:
+            candles = candles[candles["time"] <= pd.Timestamp(datetime.combine(chart_day, cur_past_t()))].reset_index(drop=True)
+        st.caption(f"📅 {chart_day.strftime('%d-%m-%Y')} {cur_past_t():%H:%M} tak ka chart (candles, zones, OI us samay tak ke).")
     else:
         candles, src, err = fetch_candles(inst_key)
     if candles.empty:
@@ -2491,7 +2491,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             st.session_state["breaches"] = br
         price_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|p", False, show_vol_zones, show_oi_zones, br, True)
         vol_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|v", False, True, False, br, False)
-    oi_data = None if is_hist else oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
+    oi_data = oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
     prev_mode = st.session_state.get("_cmode")
     send_mode = mode if prev_mode != mode else None
     st.session_state["_cmode"] = mode
@@ -2514,8 +2514,40 @@ def render_charts(df, spot, ana, n_strikes, height=440):
 
 
 # ---------------- Page ----------------
+def cur_past_t():
+    return st.session_state.get("past_t", dt_time(11, 0))
+
+
+def _shift_past(delta):
+    base = datetime.combine(date.today(), cur_past_t()) + timedelta(minutes=delta)
+    lo_ = datetime.combine(date.today(), dt_time(9, 15))
+    hi_ = datetime.combine(date.today(), dt_time(15, 30))
+    st.session_state["past_t"] = min(max(base, lo_), hi_).time()
+
+
+def _toggle_play():
+    st.session_state["play_on"] = not st.session_state.get("play_on", False)
+
+
+def _advance_play():
+    """Play on ho to ek minute aage; 15:30 par ruk jaye."""
+    if cur_past_t() >= dt_time(15, 30):
+        st.session_state["play_on"] = False
+        return
+    _shift_past(1)
+
+
 def render_page():
     df, spot = fetch_option_chain(inst_key, expiry_date)
+    is_past = chart_day != date.today()
+    if is_past and st.session_state.get("play_on"):
+        _advance_play()
+    if is_past and not df.empty:
+        pdf, pspot, perr = build_past_chain(df, chart_day, cur_past_t(), n_strikes)
+        if pdf is None:
+            st.warning(perr or "Is samay ka data nahi mila.")
+            return
+        df, spot = pdf, pspot
 
     if df.empty:
         st.warning(f"⚠️ {inst_name} ka data load nahi hua! Upstox Access Token check karein. Stock ho to uske F&O options na hon ya symbol badal gaya ho to bhi data nahi aata.")
@@ -2569,7 +2601,7 @@ def render_page():
         vm_click = bc2.button("📋 Volume matrix (9:17 se ab tak)")
         rv_click = bc3.button("📈 Volatility (9:17 se ab tak)")
         ai_click = bc4.button("🤖 AI summary (Gemini / Claude)")
-        if rv_click:
+        if rv_click and not is_past:
             with st.spinner("Volatility nikal raha hoon..."):
                 st.session_state["rv"] = {"inst": inst_name, "exp": expiry_date, **build_rv(df, spot, n_strikes)}
         rv = st.session_state.get("rv")
@@ -2581,7 +2613,7 @@ def render_page():
                 st.markdown("📈 **Realized volatility** (9:17–" + rv["end_label"] + ") · sabse zyada: " +
                             " | ".join(f"{fs(r['Strike'])} {r['Side']} {r['RV %']:.2f}%" for _, r in top3.iterrows()))
                 st.dataframe(rv["table"].head(10), hide_index=True, use_container_width=True)
-        if pr_click:
+        if pr_click and not is_past:
             with st.spinner("Pressure nikal raha hoon (option ki history)..."):
                 st.session_state["pressure"] = {"inst": inst_name, "exp": expiry_date,
                                                 **build_pressure_full(df, spot, n_strikes, ana)}
@@ -2594,7 +2626,7 @@ def render_page():
                         unsafe_allow_html=True)
             if pr["alert"]:
                 st.error("⚠️ Pressure result BEARISH hai. Chart par support zone par alert dikhega.")
-        if vm_click:
+        if vm_click and not is_past:
             with st.spinner("Volume trend nikal raha hoon..."):
                 st.session_state["vmatrix"] = {"inst": inst_name, "exp": expiry_date,
                                                **build_volume_matrix(df, spot, n_strikes, ana)}
@@ -2624,7 +2656,7 @@ def render_page():
         with _box:
             sc1, sc2, sc3 = st.columns([1, 1.4, 0.7])
             cutoff_t = sc1.time_input("Samay", value=dt_time(9, 20), step=60, label_visibility="collapsed", help="Isse pehle ka data 'purana' mana jayega")
-            if sc2.button("🔀 Shifting dekho"):
+            if sc2.button("🔀 Shifting dekho", disabled=is_past):
                 with st.spinner("Option ki history aa rahi hai (kuch second lagte hain)..."):
                     res = build_shift(df, spot, n_strikes, cutoff_t)
                 st.session_state["shift"] = {"inst": inst_name, "exp": expiry_date, **res}
@@ -2637,10 +2669,14 @@ def render_page():
             else:
                 st.caption(f"🔀 Shifting {sh_state['cut']} se {sh_state['asof']} tak ki (option chain ke upar CALLS/PUTS mein dikh rahi hai). "
                            f"{sh_state['n_ok']}/{sh_state['n_all']} options ki history mili. Naya dekhne ke liye button dobara dabayein.")
-        if chart_day != date.today():
-            render_past_chain(df, n_strikes, chart_day, past_time)
-        else:
-            render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
+        if is_past:
+            pb1, pb2, pb3, pb4 = st.columns([1, 1, 1.4, 1.6])
+            pb1.button("⏮ 1 min", on_click=_shift_past, args=(-1,))
+            pb2.button("⏭ 1 min", on_click=_shift_past, args=(1,))
+            pb3.button("⏸ Stop" if st.session_state.get("play_on") else "▶ Play", on_click=_toggle_play)
+            pb4.selectbox("Speed (sec/min)", [1, 2, 3, 5], index=2, key="play_secs")
+            st.caption(f"📅 {chart_day:%d-%m-%Y} · {cur_past_t():%H:%M} tak (pichhla data)")
+        render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
 
         # ---- Charts with Supply / Demand zones ----
         st.markdown("---")
@@ -2681,6 +2717,8 @@ def render_page():
 # Auto refresh: sirf data wala hissa dobara bante hai (fragment), poora page nahi, isliye screen smooth rehti hai
 if auto_refresh and hasattr(st, "fragment"):
     st.fragment(run_every=f"{refresh_secs}s")(render_page)()
+elif st.session_state.get("play_on") and hasattr(st, "fragment"):
+    st.fragment(run_every=f"{int(st.session_state.get('play_secs', 3))}s")(render_page)()
 else:
     render_page()
     if auto_refresh:                      # purane Streamlit version ke liye
