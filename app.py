@@ -126,12 +126,18 @@ SIDEBAR_FIX = """<style>
 [data-testid="stHeader"] {display: flex !important; visibility: visible !important;}
 </style>"""
 INPUT_CSS_LIGHT = """<style>
-div[data-baseweb="textarea"], div[data-baseweb="textarea"] > div {background:#ffffff !important;}
-div[data-baseweb="textarea"] textarea {background:#ffffff !important;color:#111827 !important;-webkit-text-fill-color:#111827 !important;}
+[data-testid="stTextArea"] textarea, [data-testid="stTextArea"] div[data-baseweb="textarea"],
+[data-testid="stTextArea"] div[data-baseweb="base-input"], textarea {background:#ffffff !important;color:#111827 !important;-webkit-text-fill-color:#111827 !important;}
+div[data-baseweb="popover"] ul, div[data-baseweb="popover"] div[role="listbox"], ul[role="listbox"],
+div[data-baseweb="popover"] li, li[role="option"], div[role="option"] {background:#ffffff !important;color:#111827 !important;}
+li[role="option"]:hover, li[role="option"][aria-selected="true"] {background:#f1f5f9 !important;}
 </style>"""
 INPUT_CSS_DARK = """<style>
-div[data-baseweb="textarea"], div[data-baseweb="textarea"] > div {background:#0f172a !important;}
-div[data-baseweb="textarea"] textarea {background:#0f172a !important;color:#e5e7eb !important;-webkit-text-fill-color:#e5e7eb !important;}
+[data-testid="stTextArea"] textarea, [data-testid="stTextArea"] div[data-baseweb="textarea"],
+[data-testid="stTextArea"] div[data-baseweb="base-input"], textarea {background:#0f172a !important;color:#e5e7eb !important;-webkit-text-fill-color:#e5e7eb !important;}
+div[data-baseweb="popover"] ul, div[data-baseweb="popover"] div[role="listbox"], ul[role="listbox"],
+div[data-baseweb="popover"] li, li[role="option"], div[role="option"] {background:#0f172a !important;color:#e5e7eb !important;}
+li[role="option"]:hover, li[role="option"][aria-selected="true"] {background:#1e293b !important;}
 </style>"""
 st.markdown((PAGE_DARK if st.session_state["theme_dark"] else PAGE_LIGHT) + SIDEBAR_FIX
             + (INPUT_CSS_DARK if st.session_state["theme_dark"] else INPUT_CSS_LIGHT), unsafe_allow_html=True)
