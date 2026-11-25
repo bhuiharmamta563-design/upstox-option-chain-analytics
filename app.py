@@ -182,6 +182,16 @@ VOLUME_GUIDE_MD = """**VajraAnalytics - Volume ka Mahatva:**
 *Ye sirf shiksha ke liye hai, trading ki salah nahi.*"""
 with st.sidebar.expander("📘 Volume Guide"):
     st.markdown(VOLUME_GUIDE_MD)
+def last_trading_days(n=5):
+    """Aaj se shuru karke pichhle n weekdays (holidays ka check nahi)."""
+    out, d = [], date.today()
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d -= timedelta(days=1)
+    return out
+
+
 chart_day = st.sidebar.selectbox("Chart date (trading din)", last_trading_days(5), index=0,
                                   format_func=lambda d_: d_.strftime("%d-%m-%Y (%a)"))
 zone_pts_s = st.sidebar.number_input("Supply zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
@@ -2186,17 +2196,6 @@ def volume_matrix_html(vm):
 
 
 # ---------------- Candles (price chart ke liye) ----------------
-@st.cache_data(ttl=3)
-def last_trading_days(n=5):
-    """Aaj se shuru karke pichhle n weekdays (holidays ka check nahi)."""
-    out, d = [], date.today()
-    while len(out) < n:
-        if d.weekday() < 5:
-            out.append(d)
-        d -= timedelta(days=1)
-    return out
-
-
 EMPTY_ANA = {"hist": True, "zone_sets": {"vol": {"supply": [], "demand": []}, "oi": {"supply": [], "demand": []}},
              "liq": [], "max_pain": None, "zone_width": 40, "step": 50}
 
@@ -2218,6 +2217,7 @@ def fetch_candles_for_day(inst_key, day):
         return pd.DataFrame(), "error", str(e)[:150]
 
 
+@st.cache_data(ttl=3)
 def fetch_candles(inst_key):
     key = enc(inst_key)
 
