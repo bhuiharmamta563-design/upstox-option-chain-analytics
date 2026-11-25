@@ -1188,7 +1188,7 @@ var MODE = 'price', TF = 5, DS = {price: {}, vol: {}, oi: null};
 var smcOn = false;
 var labOn = false;
 function getDS(m){ var k = modeKey(m); if (k === 'oi') return DS.oi; var bucket = (k === 'vol') ? DS.vol : DS.price; return (bucket && bucket[TF]) || null; }
-function markTFBtns(){ [1,5,15].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.style.outline = (t === TF) ? '2px solid #facc15' : 'none'; }); }
+function markTFBtns(){ [1,5,15,60,1440].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.style.outline = (t === TF) ? '2px solid #facc15' : 'none'; }); }
 function modeKey(m){ return (m === 'vol') ? 'vol' : (m === 'oi') ? 'oi' : 'price'; }
 function setOverlaysVisible(v){ ['zp','za','zt'].forEach(function(id){ var e = document.getElementById(id); if (e) e.style.display = v ? '' : 'none'; }); }
 function markModeBtns(){
@@ -1422,7 +1422,7 @@ var zall = document.getElementById('zall');
 if (zall) zall.addEventListener('click', function(){ if (D) { var r = obOnly ? obFit() : null; view.lo = r ? r[0] : D.flo; view.hi = r ? r[1] : D.fhi; changed(); } });
 var MB = {mP:'price', mO:'oi', mV:'vol', mB:'ob'};
 Object.keys(MB).forEach(function(id){ var e = document.getElementById(id); if (e) e.addEventListener('click', function(){ switchMode(MB[id]); }); });
-[1,5,15].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.addEventListener('click', function(){ switchTF(t); }); });
+[1,5,15,60,1440].forEach(function(t){ var e = document.getElementById('t' + t); if (e) e.addEventListener('click', function(){ switchTF(t); }); });
 var zsmc = document.getElementById('zsmc');
 if (zsmc) zsmc.addEventListener('click', function(){ smcOn = !smcOn; zsmc.textContent = smcOn ? '🧩 SMC ✓' : '🧩 SMC'; draw(); });
 var zlab = document.getElementById('zlab');
@@ -1506,7 +1506,15 @@ def _cfg(kind):
     return c
 
 
-def zoom_shell_html(kind):
+def zoom_shell_html(kind, inst=""):
+    """Har chart instance ka alag cid: inst = '-main' ya '-daily' (warna dono charts ek-dusre ko overwrite karte hain)."""
+    h_ = _zoom_shell_html_base(kind)
+    if inst:
+        h_ = h_.replace("window.__cid = CFG.kind;", f"window.__cid = CFG.kind + {json.dumps(inst)};")
+    return h_
+
+
+def _zoom_shell_html_base(kind):
     """Chart ka dhancha: kabhi badalta nahi, isliye refresh par chart reload/chhota nahi hota."""
     cfg = _cfg(kind)
     cfg["dark"] = _dark()
@@ -1542,7 +1550,7 @@ def zoom_shell_html(kind):
         f'{css}<div id="oc" class="{_wc()}"><div class="top"><div></div>'
         '<div class="btns">'
         + ('<button id="zall" class="g" title="Saare zone/levels dikhao">⤢ Sab</button>' if kind == "price" else "")
-        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="t1" class="g" title="1 minute">1m</button><button id="t5" class="g" title="5 minute">5m</button><button id="t15" class="g" title="15 minute">15m</button>' if kind == "price" else "") + ('<button id="zlab" class="g" title="OI chart par INT / TV labels">🏷 INT/TV</button><button id="zsmc" class="g" title="FVG, BOS/CHoCH, Premium/Discount dikhao ya chhupao">🧩 SMC</button><button id="mP" class="g" title="Price + Zones">📈 Price</button><button id="mO" class="g" title="OI bars">📊 OI</button><button id="mV" class="g" title="Volume zones">📊 Vol</button><button id="mB" class="g" title="Sirf OB BULL / OB BEAR">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
+        + '<button id="zm" class="g">✋ Zoom</button>' + ('<button id="t1" class="g" title="1 minute">1m</button><button id="t5" class="g" title="5 minute">5m</button><button id="t15" class="g" title="15 minute">15m</button><button id="t60" class="g" title="1 ghanta (structure)">1H</button><button id="t1440" class="g" title="1 din (structure)">1D</button>' if kind == "price" else "") + ('<button id="zlab" class="g" title="OI chart par INT / TV labels">🏷 INT/TV</button><button id="zsmc" class="g" title="FVG, BOS/CHoCH, Premium/Discount dikhao ya chhupao">🧩 SMC</button><button id="mP" class="g" title="Price + Zones">📈 Price</button><button id="mO" class="g" title="OI bars">📊 OI</button><button id="mV" class="g" title="Volume zones">📊 Vol</button><button id="mB" class="g" title="Sirf OB BULL / OB BEAR">🟦 OB</button>' if kind == "price" else "") + '<button id="fsbtn" onclick="toggleFS()">⛶ Full Screen</button></div></div>'
         f'<div id="info">{hint}</div><div id="wait">Chart load ho raha hai…</div>'
         '<div class="sc"><div class="inner" style="min-width:360px;max-width:620px;margin:auto"><div id="stage">'
         f'<svg id="svg" viewBox="0 0 {W} {H}" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:{svgbg};display:block"></svg>'
@@ -2509,11 +2517,15 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         price_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|p", False, show_vol_zones, show_oi_zones, br, True)
         vol_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|v", False, True, False, br, False)
     oi_data = oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
+    months_s, sw_on, bos_on = render_structure_controls()
+    sp_, sv_ = structure_chart_sets(months_s, sw_on, bos_on)
+    price_sets.update(sp_)
+    vol_sets.update(sv_)
     prev_mode = st.session_state.get("_cmode")
     send_mode = mode if prev_mode != mode else None
     st.session_state["_cmode"] = mode
-    components.html(zoom_shell_html("price"), height=height, scrolling=True)
-    components.html(push_html("price", {"price": price_sets, "vol": vol_sets, "oi": oi_data, "mode": send_mode}), height=0)
+    components.html(zoom_shell_html("price", "-main"), height=height, scrolling=True)
+    components.html(push_html("price-main", {"price": price_sets, "vol": vol_sets, "oi": oi_data, "mode": send_mode}), height=0)
     zb_c1, zb_c2 = st.columns(2)
     if zb_c2.button("📊 Zone cards dekho / chhupao"):
         st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
@@ -2744,6 +2756,7 @@ def scan_candles(inst_key):
     return c
 
 
+@st.cache_data(ttl=600)
 def fetch_hist_range(inst_key, interval, start_d, end_d):
     """Upstox historical-candle (day / 30minute) ek range ke liye."""
     key = enc(inst_key)
@@ -2912,42 +2925,62 @@ def daily_structure(d, pivot=2, keep=4):
     return [], lines, events
 
 
-def render_daily_section():
-    st.markdown("---")
-    st.subheader("📅 Market structure: swing high / swing low")
-    c1, c2 = st.columns([1, 1])
-    tf_pick = c1.radio("Timeframe", ["1 दिन", "1 घंटा"], horizontal=True, key="struct_tf")
-    months = c2.selectbox("Range", [1, 2, 4], index=1, format_func=lambda m_: f"{m_} महीना", key="struct_months")
+def _set_struct(key, val):
+    st.session_state[key] = val
+
+
+def _flip_struct(key):
+    st.session_state[key] = not st.session_state.get(key, True)
+
+
+def render_structure_controls():
+    """Chart ke upar: range (1M/2M/4M) aur structure lines ke toggles. 1H / 1D buttons chart ke toolbar mein hain."""
+    st.session_state.setdefault("struct_months", 2)
+    st.session_state.setdefault("struct_sw", True)
+    st.session_state.setdefault("struct_bos", True)
+    months = st.session_state["struct_months"]
+    sw_on, bos_on = st.session_state["struct_sw"], st.session_state["struct_bos"]
+    b3, b4, b5, t1, t2 = st.columns(5)
+    b3.button(("✅ " if months == 1 else "") + "1M", on_click=_set_struct, args=("struct_months", 1), key="st_m1")
+    b4.button(("✅ " if months == 2 else "") + "2M", on_click=_set_struct, args=("struct_months", 2), key="st_m2")
+    b5.button(("✅ " if months == 4 else "") + "4M", on_click=_set_struct, args=("struct_months", 4), key="st_m4")
+    t1.button(("✅ " if sw_on else "⬜ ") + "SH/SL", on_click=_flip_struct, args=("struct_sw",), key="st_sw")
+    t2.button(("✅ " if bos_on else "⬜ ") + "BO/Rev", on_click=_flip_struct, args=("struct_bos",), key="st_bos")
+    return months, sw_on, bos_on
+
+
+def _struct_filter(lines, sw_on, bos_on):
+    out = []
+    for l_ in lines:
+        is_sw = l_["lab"].startswith(("SH", "SL"))
+        if (is_sw and sw_on) or ((not is_sw) and bos_on):
+            out.append(l_)
+    return out
+
+
+def structure_chart_sets(months, sw_on, bos_on):
+    """1D (key 1440) aur 1H (key 60) ka structure data, same chart ke liye."""
     today = date.today()
     start = today - timedelta(days=31 * months + 5)
-    if tf_pick == "1 घंटा":
-        m = fetch_hist_range(inst_key, "30minute", start, today)
-        if m.empty:
-            st.warning("30-minute data nahi mila. Token ya instrument check karein.")
-            return
-        d = m.set_index("time").resample("60min", origin="start_day", offset="9h15min").agg(
+    out_p, out_v = {}, {}
+    d = fetch_hist_range(inst_key, "day", start, today)
+    if not d.empty:
+        zones, lines, _ev = daily_structure(d, pivot=2, keep=4)
+        data = price_chart_data(d, float(d["close"].iloc[-1]), EMPTY_ANA, "%d %b", f"sD{months}{sw_on}{bos_on}", True, False, False, [], False,
+                                extra={"zones": zones, "lines": _struct_filter(lines, sw_on, bos_on)})
+        out_p["1440"] = data
+        out_v["1440"] = data
+    m = fetch_hist_range(inst_key, "30minute", start, today)
+    if not m.empty:
+        h1 = m.set_index("time").resample("60min", origin="start_day", offset="9h15min").agg(
             {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
-        pv, xfmt, lbl = 3, "%d %b %H:%M", "1 घंटा"
-    else:
-        d = fetch_hist_range(inst_key, "day", start, today)
-        pv, xfmt, lbl = 2, "%d %b", "1 दिन"
-    if d.empty:
-        st.warning("Candle data nahi mila. Token ya instrument check karein.")
-        return
-    zones, lines, events = daily_structure(d, pivot=pv, keep=4)
-    data = price_chart_data(d, float(d["close"].iloc[-1]), EMPTY_ANA, xfmt, f"struct{tf_pick}{months}", True, False, False, [], False,
-                            extra={"zones": zones, "lines": lines})
-    st.caption(f"{lbl} candles, {months} mahine ki range. SH / SL (grey) = swing high / swing low, jo support aur resistance ka kaam karte hain. "
-               "Breakout / Breakdown = structure level toota. Reversal = trend palta (CHoCH). Ye historical marking hai, trade ki salah nahi.")
-    components.html(zoom_shell_html("price"), height=520, scrolling=True)
-    components.html(push_html("price", {"price": {"5": data}, "vol": {"5": data}, "oi": None, "mode": "price"}), height=0)
-    if events:
-        ev = pd.DataFrame(events, columns=["Time", "Event", "Price"]).sort_values("Time", ascending=False)
-        ev["Time"] = pd.to_datetime(ev["Time"]).dt.strftime("%d-%m-%Y %H:%M" if tf_pick == "1 घंटा" else "%d-%m-%Y")
-        st.markdown("**Events (latest pehle)**")
-        st.markdown(html_table(ev.head(25), _dark()), unsafe_allow_html=True)
-    else:
-        st.caption("Is range mein koi swing ya breakout/breakdown nahi mila.")
+        if not h1.empty:
+            zones, lines, _ev = daily_structure(h1, pivot=3, keep=4)
+            data = price_chart_data(h1, float(h1["close"].iloc[-1]), EMPTY_ANA, "%d %b %H:%M", f"sH{months}{sw_on}{bos_on}", True, False, False, [], False,
+                                    extra={"zones": zones, "lines": _struct_filter(lines, sw_on, bos_on)})
+            out_p["60"] = data
+            out_v["60"] = data
+    return out_p, out_v
 
 
 def html_table(df, dark):
@@ -3035,4 +3068,3 @@ else:
 render_scanner()
 
 
-render_daily_section()
