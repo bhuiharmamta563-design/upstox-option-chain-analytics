@@ -126,6 +126,7 @@ SIDEBAR_FIX = """<style>
 [data-testid="stHeader"] {display: flex !important; visibility: visible !important;}
 </style>"""
 INPUT_CSS_LIGHT = """<style>
+html, body, textarea, input {color-scheme: light;}
 [data-testid="stTextArea"] textarea, [data-testid="stTextArea"] div[data-baseweb="textarea"],
 [data-testid="stTextArea"] div[data-baseweb="base-input"], textarea {background:#ffffff !important;color:#111827 !important;-webkit-text-fill-color:#111827 !important;}
 div[data-baseweb="popover"] ul, div[data-baseweb="popover"] div[role="listbox"], ul[role="listbox"],
@@ -133,6 +134,7 @@ div[data-baseweb="popover"] li, li[role="option"], div[role="option"] {backgroun
 li[role="option"]:hover, li[role="option"][aria-selected="true"] {background:#f1f5f9 !important;}
 </style>"""
 INPUT_CSS_DARK = """<style>
+html, body, textarea, input {color-scheme: dark;}
 [data-testid="stTextArea"] textarea, [data-testid="stTextArea"] div[data-baseweb="textarea"],
 [data-testid="stTextArea"] div[data-baseweb="base-input"], textarea {background:#0f172a !important;color:#e5e7eb !important;-webkit-text-fill-color:#e5e7eb !important;}
 div[data-baseweb="popover"] ul, div[data-baseweb="popover"] div[role="listbox"], ul[role="listbox"],
