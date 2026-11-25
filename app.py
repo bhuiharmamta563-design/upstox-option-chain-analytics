@@ -182,6 +182,8 @@ VOLUME_GUIDE_MD = """**VajraAnalytics - Volume ka Mahatva:**
 *Ye sirf shiksha ke liye hai, trading ki salah nahi.*"""
 with st.sidebar.expander("📘 Volume Guide"):
     st.markdown(VOLUME_GUIDE_MD)
+chart_day = st.sidebar.selectbox("Chart date (trading din)", last_trading_days(5), index=0,
+                                  format_func=lambda d_: d_.strftime("%d-%m-%Y (%a)"))
 zone_pts_s = st.sidebar.number_input("Supply zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
                                      help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points). Apni marzi ke points bhi likh sakte hain.")
 zone_pts_d = st.sidebar.number_input("Demand zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
@@ -1031,7 +1033,7 @@ def zone_items(ana, show_vol=True, show_oi=True, breached=None, legacy=False):
 
 def level_lines(ana, spot):
     out = [(f"SPOT {_pfmt(spot)}", float(spot), "#f97316")]
-    if ana:
+    if ana and not ana.get("hist"):
         out.append((f"MP {ana['max_pain']}", float(ana["max_pain"]), "#8b5cf6"))
         taken = {round(v) for _, v, _ in out}
         n_liq = 0
@@ -2185,6 +2187,37 @@ def volume_matrix_html(vm):
 
 # ---------------- Candles (price chart ke liye) ----------------
 @st.cache_data(ttl=3)
+def last_trading_days(n=5):
+    """Aaj se shuru karke pichhle n weekdays (holidays ka check nahi)."""
+    out, d = [], date.today()
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d -= timedelta(days=1)
+    return out
+
+
+EMPTY_ANA = {"hist": True, "zone_sets": {"vol": {"supply": [], "demand": []}, "oi": {"supply": [], "demand": []}},
+             "liq": [], "max_pain": None, "zone_width": 40, "step": 50}
+
+
+def fetch_candles_for_day(inst_key, day):
+    """Ek trading din ke 1-minute candles (Upstox historical-candle)."""
+    key = enc(inst_key)
+    d = day.strftime("%Y-%m-%d")
+    try:
+        r = requests.get(f"https://api.upstox.com/v2/historical-candle/{key}/1minute/{d}/{d}", headers=HEADERS, timeout=20).json()
+        cs = (r.get("data") or {}).get("candles") or []
+        if not cs:
+            return pd.DataFrame(), "none", f"{d} ka candle data khali aaya"
+        c = pd.DataFrame(cs).iloc[:, :6]
+        c.columns = ["time", "open", "high", "low", "close", "volume"]
+        c["time"] = pd.to_datetime(c["time"], utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+        return c.sort_values("time").reset_index(drop=True), "intraday", ""
+    except Exception as e:
+        return pd.DataFrame(), "error", str(e)[:150]
+
+
 def fetch_candles(inst_key):
     key = enc(inst_key)
 
@@ -2341,7 +2374,14 @@ def render_table(df, spot, n, ana, show_summary, label, height):
 def render_charts(df, spot, ana, n_strikes, height=440):
     mode = "price"          # mode aur timeframe ab chart ke toolbar (Price / OI / Vol / OB, 1m / 5m / 15m) se badalte hain
     tf = 5                  # zone test ke liye default timeframe
-    candles, src, err = fetch_candles(inst_key)
+    is_hist = chart_day != date.today()
+    if is_hist:
+        candles, src, err = fetch_candles_for_day(inst_key, chart_day)
+        ana = EMPTY_ANA
+        st.caption(f"📅 Historical {chart_day.strftime('%d-%m-%Y')}: sirf candles, OB, FVG, BOS, Premium/Discount. "
+                   "Support/Resistance zones aur OI us din ke option chain se bante hain, isliye wo yahan nahi dikhte.")
+    else:
+        candles, src, err = fetch_candles(inst_key)
     if candles.empty:
         st.warning(
             "Candle data nahi mila, isliye sirf zones aur levels dikha raha hoon. "
@@ -2367,7 +2407,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
             st.session_state["breaches"] = br
         price_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|p", False, show_vol_zones, show_oi_zones, br, True)
         vol_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|v", False, True, False, br, False)
-    oi_data = oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
+    oi_data = None if is_hist else oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
     prev_mode = st.session_state.get("_cmode")
     send_mode = mode if prev_mode != mode else None
     st.session_state["_cmode"] = mode
