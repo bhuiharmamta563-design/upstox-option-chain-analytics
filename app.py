@@ -192,8 +192,7 @@ def last_trading_days(n=5):
     return out
 
 
-chart_day = st.sidebar.selectbox("Chart date (trading din)", last_trading_days(5), index=0,
-                                  format_func=lambda d_: d_.strftime("%d-%m-%Y (%a)"))
+chart_day = date.today()   # historical ab nahi; hamesha aaj ka data
 st.session_state.setdefault("past_t", dt_time(11, 0))   # pichhli date ka replay samay (page ke buttons se badalta hai)
 zone_pts_s = st.sidebar.number_input("Supply zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
                                      help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points). Apni marzi ke points bhi likh sakte hain.")
@@ -1623,7 +1622,7 @@ def smc_items(c):
     return zones, lines
 
 
-def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None, legacy=False):
+def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol=True, show_oi=True, breached=None, legacy=False, extra=None):
     items, lines = zone_items(ana, show_vol, show_oi, breached, legacy), level_lines(ana, spot)
     vals = [c["low"].min(), c["high"].max()] + [v for _, v, _ in lines] + [i["lo"] for i in items] + [i["hi"] for i in items]
     flo, fhi = float(min(vals)), float(max(vals))
@@ -1646,6 +1645,9 @@ def price_chart_data(c, spot, ana, xfmt="%H:%M", sig="", fit_all=False, show_vol
     smc_zones, smc_lines = ([], [])
     if legacy:
         smc_zones, smc_lines = smc_items(c)
+    if extra:
+        smc_zones = list(smc_zones) + list(extra.get("zones", []))
+        smc_lines = list(smc_lines) + [(x["lab"], x["val"], x["color"]) for x in extra.get("lines", [])]
     return {
         "sig": sig, "n": len(rows),
         "c": [[float(r.open), float(r.high), float(r.low), float(r.close)] for r in rows],
@@ -2714,6 +2716,273 @@ def render_page():
             ob.markdown(zone_card("🟢 DEMAND (Put OI)", zs_["oi"]["demand"], "demand", "#f0fdf4", "#16a34a"), unsafe_allow_html=True)
 
 
+SCAN_NEAR_PCT = 0.3
+
+
+@st.cache_data(ttl=120)
+def scan_candles(inst_key):
+    c, src, err = fetch_candles(inst_key)
+    if c is None or c.empty:
+        return None
+    if src == "intraday":
+        c = resample_candles(c, 5)
+    return c
+
+
+def fetch_hist_range(inst_key, interval, start_d, end_d):
+    """Upstox historical-candle (day / 30minute) ek range ke liye."""
+    key = enc(inst_key)
+    try:
+        r = requests.get(f"https://api.upstox.com/v2/historical-candle/{key}/{interval}/{end_d:%Y-%m-%d}/{start_d:%Y-%m-%d}",
+                         headers=HEADERS, timeout=20).json()
+        cs = (r.get("data") or {}).get("candles") or []
+        if not cs:
+            return pd.DataFrame()
+        c = pd.DataFrame(cs).iloc[:, :6]
+        c.columns = ["time", "open", "high", "low", "close", "volume"]
+        c["time"] = pd.to_datetime(c["time"], utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+        return c.sort_values("time").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=600)
+def scan_levels(inst_key):
+    """5-din high/low, pichhle din high/low, aur 4-ghante (30-min se) ka latest high/low."""
+    today = date.today()
+    out = {}
+    d = fetch_hist_range(inst_key, "day", today - timedelta(days=12), today)
+    if not d.empty:
+        d = d[d["time"].dt.date < today]
+        if len(d):
+            last5 = d.tail(5)
+            out["5D High"] = float(last5["high"].max())
+            out["5D Low"] = float(last5["low"].min())
+            out["Prev High"] = float(d["high"].iloc[-1])
+            out["Prev Low"] = float(d["low"].iloc[-1])
+    m = fetch_hist_range(inst_key, "30minute", today - timedelta(days=4), today)
+    if not m.empty:
+        m4 = m.set_index("time").resample("4h", origin="start_day", offset="9h15min").agg({"high": "max", "low": "min"}).dropna()
+        if len(m4):
+            out["4H High"] = float(m4["high"].iloc[-1])
+            out["4H Low"] = float(m4["low"].iloc[-1])
+    return out
+
+
+def level_note(ltp, levels):
+    """Har level ke mukable price: upar toota / neeche toota / paas (0.3% ke andar)."""
+    notes = []
+    for name, val in levels.items():
+        if val is None or val != val:
+            continue
+        pct = (ltp - val) / val * 100
+        if abs(pct) <= SCAN_NEAR_PCT:
+            notes.append(f"{name} paas")
+        elif pct > 0 and ("High" in name or "H" in name.split()[-1]):
+            notes.append(f"{name} ke upar")
+        elif pct < 0 and ("Low" in name or "L" in name.split()[-1]):
+            notes.append(f"{name} ke neeche")
+    return "; ".join(notes) if notes else "—"
+
+
+def scan_stock(sym):
+    """Ek stock: pichhle 20 candles ka high/low; status BREAKOUT / BREAKDOWN / paas / Range."""
+    key = resolve_stock(sym)
+    if not key:
+        return None
+    c = scan_candles(key)
+    if c is None or len(c) < 22:
+        return None
+    h = c["high"].astype(float).values
+    l = c["low"].astype(float).values
+    cl = c["close"].astype(float).values
+    v = c["volume"].astype(float).values if "volume" in c.columns else np.ones(len(c))
+    ltp = float(cl[-1])
+    hi = float(h[-21:-1].max())
+    lo = float(l[-21:-1].min())
+    up_pct = (hi - ltp) / ltp * 100
+    dn_pct = (ltp - lo) / ltp * 100
+    if ltp > hi:
+        status = "BREAKOUT"
+    elif ltp < lo:
+        status = "BREAKDOWN"
+    elif up_pct <= SCAN_NEAR_PCT:
+        status = "Breakout ke paas"
+    elif dn_pct <= SCAN_NEAR_PCT:
+        status = "Breakdown ke paas"
+    else:
+        status = "Range"
+    base = float(v[-25:-5].mean()) if len(v) >= 25 else 0.0
+    vol_x = float(v[-5:].mean()) / base if base > 0 else float("nan")
+    chg = (ltp - float(cl[-2])) / float(cl[-2]) * 100
+    # aakhri breakout/breakdown candle: uska time aur price = entry
+    ev_type, ev_time, ev_px = None, None, None
+    has_t = "time" in c.columns
+    for i in range(21, len(cl)):
+        hi_i = float(h[i - 20:i].max())
+        lo_i = float(l[i - 20:i].min())
+        if cl[i] > hi_i:
+            ev_type, ev_px = "BREAKOUT", float(cl[i])
+            ev_time = pd.Timestamp(c["time"].iloc[i]).strftime("%H:%M") if has_t else "—"
+        elif cl[i] < lo_i:
+            ev_type, ev_px = "BREAKDOWN", float(cl[i])
+            ev_time = pd.Timestamp(c["time"].iloc[i]).strftime("%H:%M") if has_t else "—"
+    if ev_type:
+        since = (ltp - ev_px) / ev_px * 100 * (1 if ev_type == "BREAKOUT" else -1)
+        entry_txt = {"Signal": ev_type, "Signal time": ev_time, "Entry price": round(ev_px, 2), "Entry se %": round(since, 2)}
+    else:
+        entry_txt = {"Signal": "—", "Signal time": "—", "Entry price": None, "Entry se %": None}
+    levels = dict(scan_levels(key) or {})
+    levels["Day High"] = float(h.max())
+    levels["Day Low"] = float(l.min())
+    lv_cols = {k: (round(levels[k], 2) if k in levels else None) for k in
+               ["5D High", "5D Low", "Prev High", "Prev Low", "4H High", "4H Low", "Day High", "Day Low"]}
+    return {"Stock": sym, "LTP": round(ltp, 2), "Chg %": round(chg, 2),
+            "Resistance (20)": round(hi, 2), "Support (20)": round(lo, 2),
+            "Status": status, "Vol x": (round(vol_x, 2) if vol_x == vol_x else None), **entry_txt,
+            **lv_cols, "Level note": level_note(ltp, levels)}
+
+
+def daily_structure(d, pivot=2, keep=4):
+    """Daily price structure: swing high/low (support/resistance), BOS (breakout / breakdown), CHoCH (reversal)."""
+    d = d.reset_index(drop=True)
+    h = d["high"].astype(float).values
+    l = d["low"].astype(float).values
+    cl = d["close"].astype(float).values
+    tm = d["time"]
+    n = len(d)
+    sh, sl = {}, {}
+    for k in range(pivot, n - pivot):
+        if h[k] == max(h[k - pivot:k + pivot + 1]):
+            sh[k] = float(h[k])
+        if l[k] == min(l[k - pivot:k + pivot + 1]):
+            sl[k] = float(l[k])
+    events, bos_lines = [], []
+    trend, last_sh, last_sl = None, None, None
+    for j in range(n):
+        k = j - pivot
+        if k in sh:
+            last_sh = sh[k]
+        if k in sl:
+            last_sl = sl[k]
+        if last_sh is not None and cl[j] > last_sh:
+            kind = "CHoCH UP (reversal)" if trend == "down" else "BOS UP (breakout)"
+            trend = "up"
+            events.append((tm.iloc[j], kind, float(cl[j])))
+            bos_lines.append((kind, last_sh))
+            last_sh = None
+        if last_sl is not None and cl[j] < last_sl:
+            kind = "CHoCH DOWN (reversal)" if trend == "up" else "BOS DOWN (breakdown)"
+            trend = "down"
+            events.append((tm.iloc[j], kind, float(cl[j])))
+            bos_lines.append((kind, last_sl))
+            last_sl = None
+    lines = []
+    for k in sorted(sh)[-keep:]:
+        lines.append({"lab": f"SH {sh[k]:,.1f}", "val": sh[k], "color": "#94a3b8", "dash": "2 3"})
+        events.append((tm.iloc[k], "Swing High", sh[k]))
+    for k in sorted(sl)[-keep:]:
+        lines.append({"lab": f"SL {sl[k]:,.1f}", "val": sl[k], "color": "#94a3b8", "dash": "2 3"})
+        events.append((tm.iloc[k], "Swing Low", sl[k]))
+    for kind, lv in bos_lines[-3:]:
+        if "CHoCH UP" in kind:
+            lab, col = f"Reversal UP {lv:,.1f}", "#16a34a"
+        elif "CHoCH DOWN" in kind:
+            lab, col = f"Reversal DOWN {lv:,.1f}", "#dc2626"
+        elif "BOS UP" in kind:
+            lab, col = f"Breakout {lv:,.1f}", "#16a34a"
+        else:
+            lab, col = f"Breakdown {lv:,.1f}", "#dc2626"
+        lines.append({"lab": lab, "val": lv, "color": col, "dash": "5 4"})
+    return [], lines, events
+
+
+def render_daily_section():
+    st.markdown("---")
+    st.subheader("📅 Market structure: swing high / swing low")
+    c1, c2 = st.columns([1, 1])
+    tf_pick = c1.radio("Timeframe", ["1 दिन", "1 घंटा"], horizontal=True, key="struct_tf")
+    months = c2.selectbox("Range", [1, 2, 4], index=1, format_func=lambda m_: f"{m_} महीना", key="struct_months")
+    today = date.today()
+    start = today - timedelta(days=31 * months + 5)
+    if tf_pick == "1 घंटा":
+        m = fetch_hist_range(inst_key, "30minute", start, today)
+        if m.empty:
+            st.warning("30-minute data nahi mila. Token ya instrument check karein.")
+            return
+        d = m.set_index("time").resample("60min", origin="start_day", offset="9h15min").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
+        pv, xfmt, lbl = 3, "%d %b %H:%M", "1 घंटा"
+    else:
+        d = fetch_hist_range(inst_key, "day", start, today)
+        pv, xfmt, lbl = 2, "%d %b", "1 दिन"
+    if d.empty:
+        st.warning("Candle data nahi mila. Token ya instrument check karein.")
+        return
+    zones, lines, events = daily_structure(d, pivot=pv, keep=4)
+    data = price_chart_data(d, float(d["close"].iloc[-1]), EMPTY_ANA, xfmt, f"struct{tf_pick}{months}", True, False, False, [], False,
+                            extra={"zones": zones, "lines": lines})
+    st.caption(f"{lbl} candles, {months} mahine ki range. SH / SL (grey) = swing high / swing low, jo support aur resistance ka kaam karte hain. "
+               "Breakout / Breakdown = structure level toota. Reversal = trend palta (CHoCH). Ye historical marking hai, trade ki salah nahi.")
+    components.html(zoom_shell_html("price"), height=520, scrolling=True)
+    components.html(push_html("price", {"price": {"5": data}, "vol": {"5": data}, "oi": None, "mode": "price"}), height=0)
+    if events:
+        ev = pd.DataFrame(events, columns=["Time", "Event", "Price"]).sort_values("Time", ascending=False)
+        ev["Time"] = pd.to_datetime(ev["Time"]).dt.strftime("%d-%m-%Y %H:%M" if tf_pick == "1 घंटा" else "%d-%m-%Y")
+        st.markdown("**Events (latest pehle)**")
+        st.dataframe(ev.head(25), hide_index=True, use_container_width=True)
+    else:
+        st.caption("Is range mein koi swing ya breakout/breakdown nahi mila.")
+
+
+def render_scanner():
+    st.markdown("---")
+    st.subheader("🔎 Stock Scanner: breakout / breakdown")
+    st.caption("Har stock ke aaj ke 5-minute candles par: pichhle 20 candles ka high (resistance) aur low (support). "
+               "BREAKOUT = price high ke upar band, BREAKDOWN = low ke neeche band. 'Paas' = 0.3% ke andar. "
+               "Signal time = aakhri breakout/breakdown candle ka time, Entry price = us candle ka close. "
+               "Entry se % = entry se ab tak ka move (breakdown par ulta). 5D = pichhle 5 din, Prev = pichhla din, 4H = 4-ghante bar. "
+               "Level note = price kis level ke paas / upar / neeche hai. Ye data hai, trade ki salah nahi.")
+    txt = st.text_area("Stocks (comma se, jaise RELIANCE, TCS, INFY). 50 ya poori F&O list bhi paste kar sakte hain.",
+                       value=", ".join(STOCKS), height=110, key="scan_syms")
+    syms = []
+    for x in txt.replace("\n", ",").split(","):
+        x = x.strip().upper()
+        if x and x not in syms:
+            syms.append(x)
+    st.caption(f"{len(syms)} stock chune gaye. Har stock par 3-4 API calls lagti hain, isliye bade list mein time lag sakta hai.")
+    if st.button("🔍 Scan chalao"):
+        st.session_state["scan_on"] = True
+    if not st.session_state.get("scan_on"):
+        return
+    rows = []
+    prog = st.progress(0.0)
+    for i, sym in enumerate(syms):
+        try:
+            r = scan_stock(sym)
+        except Exception:
+            r = None
+        if r:
+            rows.append(r)
+        prog.progress((i + 1) / max(len(syms), 1))
+    prog.empty()
+    if not rows:
+        st.warning("Koi stock ka data nahi mila. Token ya market hours check karein.")
+        return
+    sdf = pd.DataFrame(rows)
+    groups = [("🚀 BREAKOUT (abhi toota)", "BREAKOUT"),
+              ("⚠️ Breakout ke paas", "Breakout ke paas"),
+              ("🔻 BREAKDOWN (abhi toota)", "BREAKDOWN"),
+              ("🟠 Breakdown ke paas", "Breakdown ke paas")]
+    for title, status in groups:
+        part = sdf[sdf["Status"] == status].sort_values("Vol x", ascending=False)
+        st.markdown(f"**{title}** · {len(part)} stock")
+        if len(part):
+            st.dataframe(part, hide_index=True, use_container_width=True)
+        else:
+            st.caption("Koi nahi.")
+
+
 # Auto refresh: sirf data wala hissa dobara bante hai (fragment), poora page nahi, isliye screen smooth rehti hai
 if auto_refresh and hasattr(st, "fragment"):
     st.fragment(run_every=f"{refresh_secs}s")(render_page)()
@@ -2724,3 +2993,9 @@ else:
     if auto_refresh:                      # purane Streamlit version ke liye
         time.sleep(refresh_secs)
         st.rerun()
+
+
+render_scanner()
+
+
+render_daily_section()
