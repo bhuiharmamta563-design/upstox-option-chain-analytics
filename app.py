@@ -16,7 +16,7 @@ import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from datetime import time as dt_time
 from urllib.parse import quote
 
@@ -194,6 +194,8 @@ def last_trading_days(n=5):
 
 chart_day = st.sidebar.selectbox("Chart date (trading din)", last_trading_days(5), index=0,
                                   format_func=lambda d_: d_.strftime("%d-%m-%Y (%a)"))
+past_time = st.sidebar.time_input("Past option chain samay", value=dt_time(11, 0), step=60,
+                                  help="Pichhli date chuni ho to us din ka option chain is samay tak dikhega")
 zone_pts_s = st.sidebar.number_input("Supply zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
                                      help="0 = auto: spot ka 0.16% (Nifty par lagbhag 40 points). Apni marzi ke points bhi likh sakte hain.")
 zone_pts_d = st.sidebar.number_input("Demand zone ki chaudai (points, 0 = auto)", min_value=0.0, value=0.0, step=5.0,
@@ -712,7 +714,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
         rows.append(
             f'<tr class="{"atm" if is_atm else ""}">'
             # CALLS: IV | LTP | OI Chg | OI | Volume  (Volume strike ke paas)
-            + plain_cell(f'{r["Call IV"]:.1f}', cbg)
+            + plain_cell(_iv_txt(r["Call IV"]), cbg)
             + ltp_cell(r["Call LTP"], cbg, True, s, spot)
             + chg_cell(r["Call OI Chg"], cbg)
             + bar_cell(f'{r["Call OI"] / 1e5:.1f}', r["Call OI"] / mx["Call OI"] * 100, cbg, "rgba(248,113,113,.55)", "to left", "red")
@@ -728,7 +730,7 @@ def build_table_body(df, spot, n, ana=None, show_summary=True, inst_label="SPOT"
             + ltp_cell(r["Put LTP"], pbg, False, s, spot)
             + zone_td
             + pcr_td
-            + plain_cell(f'{r["Put IV"]:.1f}', pbg)
+            + plain_cell(_iv_txt(r["Put IV"]), pbg)
             + "</tr>"
         )
     if not spot_done:
@@ -2361,6 +2363,88 @@ def zone_marks(ana, df, spot):
     return m
 
 
+def _iv_txt(v):
+    try:
+        f_ = float(v)
+        return "—" if f_ != f_ else f"{f_:.1f}"
+    except Exception:
+        return "—"
+
+
+@st.cache_data(ttl=86400)
+def fetch_option_day(key, day_str):
+    """Ek option ke ek trading din ke 1-minute candles (time, open, high, low, close, volume, oi)."""
+    try:
+        r = requests.get(f"https://api.upstox.com/v2/historical-candle/{enc(key)}/1minute/{day_str}/{day_str}", headers=HEADERS, timeout=20).json()
+        cs = (r.get("data") or {}).get("candles") or []
+        if not cs:
+            return None
+        names = ["time", "open", "high", "low", "close", "volume", "oi"]
+        c = pd.DataFrame(cs).iloc[:, :len(names)]
+        c.columns = names[:c.shape[1]]
+        c["time"] = pd.to_datetime(c["time"], utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+        if "oi" not in c.columns:
+            c["oi"] = 0.0
+        return c.sort_values("time").reset_index(drop=True)
+    except Exception:
+        return None
+
+
+def build_past_chain(df, day, t_clock, n):
+    """Us din ka option chain t_clock tak: LTP (last close), cumulative Volume, OI, OI Chg (din ki shuruaat se)."""
+    d = df.sort_values("Strike").reset_index(drop=True)
+    idx_c, _, idx_err = fetch_candles_for_day(inst_key, day)
+    if idx_c.empty:
+        return None, None, f"Index ka candle data nahi mila: {idx_err}"
+    t = pd.Timestamp(datetime.combine(day, t_clock))
+    sp = idx_c[idx_c["time"] <= t]
+    spot_t = float(sp["close"].iloc[-1]) if not sp.empty else float(idx_c["open"].iloc[0])
+    ai = int((d["Strike"] - spot_t).abs().idxmin())
+    view = d.iloc[max(ai - n, 0): ai + n + 1].copy()
+    day_str = day.strftime("%Y-%m-%d")
+    keys = [k for k in list(view["Call Key"]) + list(view["Put Key"]) if isinstance(k, str) and k]
+    hist = {}
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for k, h in zip(keys, ex.map(lambda k_: fetch_option_day(k_, day_str), keys)):
+            hist[k] = h
+    rows = []
+    for _, r in view.iterrows():
+        row = {"Strike": float(r["Strike"]), "Call IV": np.nan, "Put IV": np.nan}
+        for side in ("Call", "Put"):
+            h = hist.get(r.get(f"{side} Key"))
+            ltp = oi = vol = oi_chg = 0.0
+            if h is not None and not h.empty:
+                upto = h[h["time"] <= t]
+                if not upto.empty:
+                    last = upto.iloc[-1]
+                    ltp = float(last["close"])
+                    oi = float(last["oi"])
+                    vol = float(upto["volume"].sum())
+                    oi_chg = oi - float(h["oi"].iloc[0])
+            row[f"{side} LTP"] = ltp
+            row[f"{side} OI"] = oi
+            row[f"{side} Vol"] = vol
+            row[f"{side} OI Chg"] = oi_chg
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    if out[["Call LTP", "Put LTP"]].abs().sum().sum() == 0:
+        return None, spot_t, "Is samay tak option ka data nahi mila (expiry ya date check karein)."
+    return out, spot_t, ""
+
+
+def render_past_chain(df, n, day, t_clock):
+    with st.spinner("Pichhle din ka option chain nikal raha hoon..."):
+        pdf, spot_t, err = build_past_chain(df, day, t_clock, n)
+    if pdf is None:
+        st.warning(err or "Data nahi mila.")
+        return
+    st.caption(f"📅 {day:%d-%m-%Y} {t_clock:%H:%M} tak ka option chain (spot {spot_t:,.2f}). "
+               "OI aur Volume us samay tak ke hain, OI Chg din ki shuruaat se. IV is view mein nahi hai (—).")
+    body = build_table_body(pdf, spot_t, n, EMPTY_ANA, False, inst_name, None, {}, None)
+    components.html(table_shell_html(), height=min(140 + (2 * n + 2) * 50, 1100), scrolling=True)
+    components.html(push_html("table", {"html": body}), height=0)
+
+
 def render_table(df, spot, n, ana, show_summary, label, height):
     components.html(table_shell_html(), height=height, scrolling=True)
     vm = st.session_state.get("vmatrix") or {}
@@ -2553,7 +2637,10 @@ def render_page():
             else:
                 st.caption(f"🔀 Shifting {sh_state['cut']} se {sh_state['asof']} tak ki (option chain ke upar CALLS/PUTS mein dikh rahi hai). "
                            f"{sh_state['n_ok']}/{sh_state['n_all']} options ki history mili. Naya dekhne ke liye button dobara dabayein.")
-        render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
+        if chart_day != date.today():
+            render_past_chain(df, n_strikes, chart_day, past_time)
+        else:
+            render_table(df, spot, n_strikes, ana, show_summary, inst_name, min(140 + (2 * n_strikes + 2) * 50, 1100))
 
         # ---- Charts with Supply / Demand zones ----
         st.markdown("---")
