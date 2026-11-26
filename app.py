@@ -2520,7 +2520,7 @@ def render_charts(df, spot, ana, n_strikes, height=440):
         vol_sets[str(t_)] = price_chart_data(cdl.tail(200), spot, ana, xfmt, sig_ + "|v", False, True, False, br, False)
     oi_data = oi_chart_data(df, spot, min(n_strikes, 15), ana, inst_name, show_vol_zones, show_oi_zones)
     months_s, sw_on, bos_on = render_structure_controls()
-    sp_, sv_ = structure_chart_sets(months_s, sw_on, bos_on)
+    sp_, sv_ = structure_chart_sets_cached(inst_key, months_s, sw_on, bos_on)
     price_sets.update(sp_)
     vol_sets.update(sv_)
     with st.expander("📅 Structure events (SH/SL, BOS, CHoCH)", expanded=False):
@@ -2576,8 +2576,99 @@ def _advance_play():
     _shift_past(1)
 
 
+INDEX_SCAN_ALIASES = {
+    "NIFTY": "Nifty 50", "NIFTY 50": "Nifty 50", "NIFTY50": "Nifty 50",
+    "BANKNIFTY": "Bank Nifty", "BANK NIFTY": "Bank Nifty", "NIFTY BANK": "Bank Nifty",
+    "FINNIFTY": "Fin Nifty", "FIN NIFTY": "Fin Nifty",
+    "MIDCPNIFTY": "Midcap Nifty", "MIDCAP NIFTY": "Midcap Nifty",
+    "NIFTY NEXT 50": "Nifty Next 50", "SENSEX": "Sensex", "BANKEX": "Bankex",
+}
+
+
+def scan_key_for(sym):
+    """Index naam ho to uski direct key; warna stock (NSE EQ) ki key."""
+    name = INDEX_SCAN_ALIASES.get(sym.upper())
+    if name and name in INDEXES:
+        return INDEXES[name]
+    return resolve_stock(sym)
+
+
+def _alert_list():
+    return st.session_state.setdefault("alerts", [])
+
+
+def check_alert(a, spot):
+    """(hit, near): hit = level paar hua; near = level ke tol% ke andar, abhi paar nahi."""
+    lvl = a["level"]
+    tol = lvl * a["tol"] / 100.0
+    if a["dir"] == "up":
+        hit = spot >= lvl
+        near = (not hit) and spot >= lvl - tol
+    else:
+        hit = spot <= lvl
+        near = (not hit) and spot <= lvl + tol
+    return hit, near
+
+
+def render_alert_banner(spot, inst):
+    """Page par active alerts ka banner (live spot se)."""
+    for a in _alert_list():
+        if a["inst"] != inst:
+            continue
+        hit, near = check_alert(a, spot)
+        dir_txt = "upar" if a["dir"] == "up" else "neeche"
+        if hit:
+            st.warning(f"🔔 {a['name']} ({a['level']:,.2f}) {dir_txt} hit ho gaya. LTP {spot:,.2f}")
+        elif near:
+            st.info(f"⚠️ {a['name']} ({a['level']:,.2f}) ke paas hai. LTP {spot:,.2f}, {a['tol']}% ke andar")
+
+
+def _del_alert(aid):
+    st.session_state["alerts"] = [a for a in _alert_list() if a["id"] != aid]
+
+
+def _add_alert(name, level, direction, tol, inst):
+    _alert_list().append({"id": int(time.time() * 1000), "inst": inst, "name": name,
+                          "level": float(level), "dir": direction, "tol": float(tol)})
+
+
+def render_alert_panel():
+    st.markdown("---")
+    st.subheader("🔔 Price alerts")
+    st.caption("Alert sirf tab dikhega jab ye app khula ho aur page refresh ho. Phone notification nahi bhejta. "
+               "Reboot ya browser band hone par alerts khatam ho jate hain.")
+    lv = scan_levels(inst_key) or {}
+    opts = list(lv.keys()) + ["Manual"]
+    c1, c2, c3 = st.columns([1.4, 1, 1])
+    pick = c1.selectbox("Level", opts, key="al_pick")
+    if pick == "Manual":
+        price = c2.number_input("Price", min_value=0.0, value=0.0, step=1.0, key="al_price")
+    else:
+        price = float(lv[pick])
+        c2.metric("Level", f"{price:,.2f}")
+    dir_pick = c3.selectbox("Jab", ["upar jaaye", "neeche jaaye"], key="al_dir")
+    tol = st.slider("Paas ka matlab (%)", 0.1, 1.0, 0.3, 0.1, key="al_tol")
+    if st.button("➕ Alert add karein"):
+        if price and price > 0:
+            _add_alert(pick, price, "up" if dir_pick == "upar jaaye" else "down", tol, inst_name)
+            st.success(f"Alert add ho gaya: {pick} {price:,.2f} {dir_pick}")
+        else:
+            st.warning("Price 0 se zyada daalein.")
+    mine = [a for a in _alert_list() if a["inst"] == inst_name]
+    if mine:
+        st.markdown(f"**Active alerts ({inst_name})**")
+        for a in mine:
+            cc1, cc2 = st.columns([5, 1])
+            cc1.write(f"{a['name']}: {a['level']:,.2f} {'upar' if a['dir'] == 'up' else 'neeche'} (paas {a['tol']}%)")
+            cc2.button("❌", key=f"al_del_{a['id']}", on_click=_del_alert, args=(a["id"],))
+    else:
+        st.caption("Is instrument ke liye koi alert nahi.")
+
+
 def render_page():
     df, spot = fetch_option_chain(inst_key, expiry_date)
+    if not df.empty and spot:
+        render_alert_banner(spot, inst_name)
     is_past = chart_day != date.today()
     if is_past and st.session_state.get("play_on"):
         _advance_play()
@@ -2828,9 +2919,10 @@ def level_note(ltp, levels):
     return "; ".join(notes) if notes else "—"
 
 
-def scan_stock(sym):
+def scan_stock(sym, key=None):
     """Ek stock: pichhle 20 candles ka high/low; status BREAKOUT / BREAKDOWN / paas / Range."""
-    key = resolve_stock(sym)
+    if key is None:
+        key = resolve_stock(sym)
     if not key:
         return None
     c = scan_candles(key)
@@ -3000,6 +3092,12 @@ def _struct_filter(lines, sw_on, bos_on):
     return out
 
 
+@st.cache_data(ttl=300)
+def structure_chart_sets_cached(inst_key_, months, sw_on, bos_on):
+    """Structure chart ke price/volume sets: 5 minute cache (har rerun par dobara na banein)."""
+    return structure_chart_sets(months, sw_on, bos_on)
+
+
 def structure_chart_sets(months, sw_on, bos_on):
     """1D (key 1440) aur 1H (key 60) ka structure data, same chart ke liye."""
     today = date.today()
@@ -3047,6 +3145,20 @@ def html_table(df, dark):
             f"<thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
 
 
+@st.cache_data(ttl=120)
+def run_scan(pairs):
+    """Poora scan ek hi baar (120 second cache). pairs = ((symbol, instrument_key), ...); keys bahar se aati hain."""
+    rows = []
+    for sym, key in pairs:
+        try:
+            r = scan_stock(sym, key)
+        except Exception:
+            r = None
+        if r:
+            rows.append(r)
+    return rows
+
+
 def render_scanner():
     st.markdown("---")
     st.subheader("🔎 Stock Scanner: breakout / breakdown")
@@ -3056,7 +3168,7 @@ def render_scanner():
                "Entry se % = entry se ab tak ka move (breakdown par ulta). 5D = pichhle 5 din, Prev = pichhla din, 4H = 4-ghante bar. "
                "Level note = price kis level ke paas / upar / neeche hai. Ye data hai, trade ki salah nahi.")
     txt = st.text_area("Stocks (comma se, jaise RELIANCE, TCS, INFY). 50 ya poori F&O list bhi paste kar sakte hain.",
-                       value=", ".join(STOCKS), height=110, key="scan_syms")
+                       value=", ".join(["NIFTY 50"] + STOCKS), height=110, key="scan_syms")
     syms = []
     for x in txt.replace("\n", ",").split(","):
         x = x.strip().upper()
@@ -3067,17 +3179,9 @@ def render_scanner():
         st.session_state["scan_on"] = True
     if not st.session_state.get("scan_on"):
         return
-    rows = []
-    prog = st.progress(0.0)
-    for i, sym in enumerate(syms):
-        try:
-            r = scan_stock(sym)
-        except Exception:
-            r = None
-        if r:
-            rows.append(r)
-        prog.progress((i + 1) / max(len(syms), 1))
-    prog.empty()
+    with st.spinner("Scan ho raha hai (pehli baar kuch second lagenge, phir cache se fast)..."):
+        pairs = tuple((sym, scan_key_for(sym)) for sym in syms)
+        rows = run_scan(pairs)
     if not rows:
         st.warning("Koi stock ka data nahi mila. Token ya market hours check karein.")
         return
@@ -3112,3 +3216,4 @@ else:
 render_scanner()
 
 
+render_alert_panel()
