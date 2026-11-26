@@ -2523,19 +2523,30 @@ def render_charts(df, spot, ana, n_strikes, height=440):
     sp_, sv_ = structure_chart_sets_cached(inst_key, months_s, sw_on, bos_on)
     price_sets.update(sp_)
     vol_sets.update(sv_)
+    _tf_lbl = st.session_state.get("struct_tf", "1 दिन")
+    _tr = structure_trend(inst_key, _tf_lbl, months_s)
+    if _tr:
+        _col = {"UPTREND": "#16a34a", "DOWNTREND": "#dc2626"}.get(_tr["label"], "#64748b")
+        _shv = f"{_tr['sh']:,.2f}" if _tr["sh"] is not None else "—"
+        _slv = f"{_tr['sl']:,.2f}" if _tr["sl"] is not None else "—"
+        st.markdown(f"<div style='padding:6px 10px;border-radius:8px;border:1px solid #cbd5e1;margin:4px 0'>"
+                    f"📈 Trend ({_tf_lbl}, {months_s} mahina): <b style='color:{_col}'>{_tr['label']}</b> · {_tr['detail']} · "
+                    f"last SH {_shv} / SL {_slv}</div>", unsafe_allow_html=True)
+    components.html(zoom_shell_html("price", "-main"), height=height, scrolling=True)
+    components.html(push_html("price-main", {"price": price_sets, "vol": vol_sets, "oi": oi_data, "mode": send_mode}), height=0)
     with st.expander("📅 Structure events (SH/SL, BOS, CHoCH)", expanded=False):
         ev_df = structure_events_df(inst_key, months_s)
+        _sw = st.session_state.get("struct_sw", True)
+        _bos = st.session_state.get("struct_bos", True)
+        if not ev_df.empty:
+            _is_sw = ev_df["Event"].str.startswith("Swing")
+            ev_df = ev_df[(_is_sw & _sw) | ((~_is_sw) & _bos)].reset_index(drop=True)
         if ev_df.empty:
-            st.caption("Is range mein structure events nahi mile.")
+            st.caption("Is range mein (toggles ke hisaab se) structure events nahi hain.")
         else:
             st.markdown(html_table(ev_df.head(40), _dark()), unsafe_allow_html=True)
             st.download_button("⬇️ Structure events CSV", ev_df.to_csv(index=False).encode("utf-8"),
                                file_name="structure_events.csv", mime="text/csv", key="dl_struct_ev")
-    prev_mode = st.session_state.get("_cmode")
-    send_mode = mode if prev_mode != mode else None
-    st.session_state["_cmode"] = mode
-    components.html(zoom_shell_html("price", "-main"), height=height, scrolling=True)
-    components.html(push_html("price-main", {"price": price_sets, "vol": vol_sets, "oi": oi_data, "mode": send_mode}), height=0)
     zb_c1, zb_c2 = st.columns(2)
     if zb_c2.button("📊 Zone cards dekho / chhupao"):
         st.session_state["zc_show"] = not st.session_state.get("zc_show", False)
@@ -3038,6 +3049,58 @@ def _set_struct(key, val):
 
 def _flip_struct(key):
     st.session_state[key] = not st.session_state.get(key, True)
+
+
+def swing_points(d, pivot):
+    """Confirmed swing high / low: [(index, price), ...] dono lists, time order mein."""
+    h = d["high"].astype(float).values
+    l = d["low"].astype(float).values
+    n = len(d)
+    sh, sl = [], []
+    for k in range(pivot, n - pivot):
+        if h[k] == max(h[k - pivot:k + pivot + 1]):
+            sh.append((k, float(h[k])))
+        if l[k] == min(l[k - pivot:k + pivot + 1]):
+            sl.append((k, float(l[k])))
+    return sh, sl
+
+
+def trend_from_swings(sh, sl):
+    """Last 2 swing high aur 2 swing low se: HH+HL = UPTREND, LH+LL = DOWNTREND, warna RANGE."""
+    if len(sh) < 2 or len(sl) < 2:
+        return "KAM DATA", "swing 2 se kam hain"
+    hh = sh[-1][1] > sh[-2][1]
+    hl = sl[-1][1] > sl[-2][1]
+    lh = sh[-1][1] < sh[-2][1]
+    ll = sl[-1][1] < sl[-2][1]
+    if hh and hl:
+        return "UPTREND", "HH aur HL"
+    if lh and ll:
+        return "DOWNTREND", "LH aur LL"
+    return "RANGE / MIXED", "swings ka order saaf nahi"
+
+
+@st.cache_data(ttl=300)
+def structure_trend(inst_key, tf_pick, months):
+    """Chune hue timeframe aur range ke liye trend. Returns dict ya None."""
+    today = date.today()
+    start = today - timedelta(days=31 * months + 5)
+    if tf_pick == "1 घंटा":
+        m = fetch_hist_range(inst_key, "30minute", start, today)
+        if m.empty:
+            return None
+        d = m.set_index("time").resample("60min", origin="start_day", offset="9h15min").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
+        pv = 3
+    else:
+        d = fetch_hist_range(inst_key, "day", start, today)
+        pv = 2
+    if d is None or d.empty:
+        return None
+    sh, sl = swing_points(d, pv)
+    label, detail = trend_from_swings(sh, sl)
+    return {"label": label, "detail": detail,
+            "sh": sh[-1][1] if sh else None, "sl": sl[-1][1] if sl else None}
 
 
 @st.cache_data(ttl=600)
