@@ -1367,7 +1367,8 @@ function drawOI(){
 }
 
 function draw(){ if (!D) return; if (MODE === 'oi') drawOI(); else drawPrice(); window.__view = view; window.__mode = MODE; window.__tf = TF; }
-function changed(){ clampView(); persist(false); draw(); }
+var _rafQ = false;
+function changed(){ clampView(); if (!_rafQ) { _rafQ = true; requestAnimationFrame(function(){ _rafQ = false; persist(false); draw(); }); } }
 
 var P = {};
 function handle(e, p, zone){
